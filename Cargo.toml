@@ -30,4 +30,5 @@ opt-level = 3
 opt-level = 1
 
 [dependencies]
+anyhow = "1.0.100"
 git2 = "0.20.2"
