@@ -4,7 +4,6 @@
 [package]
 name = "oxidot"
 version = "0.1.0"
-edition = "2024"
 keywords = ["dotfile-manager", "dotfiles", "cli-tool"]
 categories = ["command-line-utilities"]
 repository = "https://github.com/awkless/ocd.git"
@@ -12,7 +11,6 @@ readme = "README.md"
 authors = ["Jason Pena <jasonpena@awkless.com>"]
 edition = "2021"
 license = "MIT"
-version = "0.1.0"
 rust-version = "1.82.0"
 
 [lib]
@@ -32,3 +30,4 @@ opt-level = 3
 opt-level = 1
 
 [dependencies]
+git2 = "0.20.2"
