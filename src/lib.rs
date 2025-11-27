@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2025 Jason Pena <jasonpena@awkless.com>
 // SPDX-License-Identifier: MIT
 
+use anyhow::{anyhow, Result};
 use git2::Repository;
-use std::path::Path;
-use anyhow::Result;
+use std::{path::Path, ffi::OsStr, process::Command};
 
 /// Cluster of dotfiles.
 ///
@@ -43,4 +43,35 @@ impl Cluster {
     pub fn try_new_clone(url: impl AsRef<str>, path: impl AsRef<Path>) -> Result<Self> {
         todo!();
     }
+}
+
+fn syscall_non_interactive(
+    cmd: impl AsRef<OsStr>,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+) -> Result<String> {
+    let output = Command::new(cmd.as_ref()).args(args).output()?;
+    let stdout = String::from_utf8_lossy(output.stdout.as_slice()).into_owned();
+    let stderr = String::from_utf8_lossy(output.stderr.as_slice()).into_owned();
+    let mut message = String::new();
+
+    if !stdout.is_empty() {
+        message.push_str(format!("stdout: {stdout}").as_str());
+    }
+
+    if !stderr.is_empty() {
+        message.push_str(format!("stderr: {stderr}").as_str());
+    }
+
+    if !output.status.success() {
+        return Err(anyhow!("command {:?} failed:\n{message}", cmd.as_ref()));
+    }
+
+    // INVARIANT: Chomp trailing newlines.
+    let message = message
+        .strip_suffix("\r\n")
+        .or(message.strip_suffix('\n'))
+        .map(ToString::to_string)
+        .unwrap_or(message);
+
+    Ok(message)
 }
