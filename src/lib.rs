@@ -75,3 +75,15 @@ fn syscall_non_interactive(
 
     Ok(message)
 }
+
+fn syscall_interactive(
+    cmd: impl AsRef<OsStr>,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+) -> Result<()> {
+    let status = Command::new(cmd.as_ref()).args(args).spawn()?.wait()?;
+    if !status.success() {
+        return Err(anyhow!("command {:?} failed", cmd.as_ref()));
+    }
+
+    Ok(())
+}
