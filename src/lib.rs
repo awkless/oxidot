@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{anyhow, Result};
+use auth_git2::{GitAuthenticator, Prompter};
 use git2::Repository;
-use std::{path::Path, ffi::OsStr, process::Command};
+use indicatif::{MultiProgress, ProgressBar};
+use inquire::{Password, Text};
+use std::{ffi::OsStr, path::Path, process::Command};
 
 /// Cluster of dotfiles.
 ///
@@ -28,7 +31,8 @@ use std::{path::Path, ffi::OsStr, process::Command};
 ///
 /// 1. [ArchWiki - dotfiles](https://wiki.archlinux.org/title/Dotfiles#Tracking_dotfiles_directly_with_Git)
 pub struct Cluster {
-    repo: Repository,
+    repository: Repository,
+    authenticator: GitAuthenticator,
 }
 
 impl Cluster {
@@ -40,9 +44,91 @@ impl Cluster {
         todo!();
     }
 
-    pub fn try_new_clone(url: impl AsRef<str>, path: impl AsRef<Path>) -> Result<Self> {
+    pub fn try_new_clone(
+        url: impl AsRef<str>,
+        path: impl AsRef<Path>,
+        bar_kind: ProgressBarKind,
+    ) -> Result<Self> {
         todo!();
     }
+}
+
+#[derive(Clone)]
+struct ProgressBarAuthenticator {
+    kind: ProgressBarKind,
+}
+
+impl ProgressBarAuthenticator {
+    fn new(kind: ProgressBarKind) -> Self {
+        Self { kind }
+    }
+}
+
+impl Prompter for ProgressBarAuthenticator {
+    fn prompt_username_password(
+        &mut self,
+        url: &str,
+        _config: &git2::Config,
+    ) -> Option<(String, String)> {
+        let prompt = || -> Option<(String, String)> {
+            let username = Text::new("username").prompt().unwrap();
+            let password = Password::new("password")
+                .without_confirmation()
+                .prompt()
+                .unwrap();
+            Some((username, password))
+        };
+
+        match &self.kind {
+            ProgressBarKind::SingleBar(bar) => bar.suspend(prompt),
+            ProgressBarKind::MultiBar(bar) => bar.suspend(prompt),
+        }
+    }
+
+    fn prompt_password(
+        &mut self,
+        username: &str,
+        url: &str,
+        _config: &git2::Config,
+    ) -> Option<String> {
+        let prompt = || -> Option<String> {
+            let password = Password::new("password")
+                .without_confirmation()
+                .prompt()
+                .unwrap();
+            Some(password)
+        };
+
+        match &self.kind {
+            ProgressBarKind::SingleBar(bar) => bar.suspend(prompt),
+            ProgressBarKind::MultiBar(bar) => bar.suspend(prompt),
+        }
+    }
+
+    fn prompt_ssh_key_passphrase(
+        &mut self,
+        private_key_path: &Path,
+        _git_config: &git2::Config,
+    ) -> Option<String> {
+        let prompt = || -> Option<String> {
+            let password = Password::new("password")
+                .without_confirmation()
+                .prompt()
+                .unwrap();
+            Some(password)
+        };
+
+        match &self.kind {
+            ProgressBarKind::MultiBar(bar) => bar.suspend(prompt),
+            ProgressBarKind::SingleBar(bar) => bar.suspend(prompt),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum ProgressBarKind {
+    SingleBar(ProgressBar),
+    MultiBar(MultiProgress),
 }
 
 fn syscall_non_interactive(
