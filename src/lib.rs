@@ -40,7 +40,7 @@ impl Cluster {
         let repository = Repository::init_bare(path)?;
         let mut config = repository.config()?;
         config.set_str("status.showUntrackedFiles", "no")?;
-        config.set_str("core.sparseScheckout", "true")?;
+        config.set_str("core.sparseCheckout", "true")?;
 
         Ok(Self {
             repository,
@@ -49,7 +49,21 @@ impl Cluster {
     }
 
     pub fn try_new_open(path: impl AsRef<Path>) -> Result<Self> {
-        todo!();
+        let repository = Repository::open(path)?;
+        let mut config = repository.config()?;
+
+        if config.get_str("status.showUntrackedFiles")? != "no" {
+            config.set_str("status.showUntrackedFiles", "no")?;
+        }
+
+        if config.get_str("core.sparseCheckout")? != "true" {
+            config.set_str("core.sparseCheckout", "true")?;
+        }
+
+        Ok(Self {
+            repository,
+            authenticator: GitAuthenticator::default(),
+        })
     }
 
     pub fn try_new_clone(
