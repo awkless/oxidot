@@ -3,10 +3,11 @@
 
 use anyhow::{anyhow, Result};
 use auth_git2::{GitAuthenticator, Prompter};
-use git2::Repository;
-use indicatif::{MultiProgress, ProgressBar};
+use git2::{build::RepoBuilder, Config, FetchOptions, RemoteCallbacks, Repository};
+use indicatif::ProgressBar;
 use inquire::{Password, Text};
 use std::{ffi::OsStr, path::Path, process::Command};
+use tracing::{info, instrument};
 
 /// Cluster of dotfiles.
 ///
@@ -69,88 +70,100 @@ impl Cluster {
     pub fn try_new_clone(
         url: impl AsRef<str>,
         path: impl AsRef<Path>,
-        bar_kind: ProgressBarKind,
+        prompter: ProgressBarAuthenticator,
     ) -> Result<Self> {
-        todo!();
+        let authenticator = GitAuthenticator::default().set_prompter(prompter.clone());
+        let config = Config::open_default()?;
+        let mut rc = RemoteCallbacks::new();
+        rc.credentials(authenticator.credentials(&config));
+        rc.transfer_progress(|progress| {
+            let stats = progress.to_owned();
+            let bar_size = stats.total_objects() as u64;
+            let bar_pos = stats.received_objects() as u64;
+            prompter.bar.set_length(bar_size);
+            prompter.bar.set_position(bar_pos);
+            true
+        });
+
+        let mut fo = FetchOptions::new();
+        fo.remote_callbacks(rc);
+
+        let repository = RepoBuilder::new()
+            .bare(true)
+            .fetch_options(fo)
+            .clone(url.as_ref(), path.as_ref())?;
+
+        Ok(Self {
+            repository,
+            authenticator,
+        })
     }
 }
 
 #[derive(Clone)]
-struct ProgressBarAuthenticator {
-    kind: ProgressBarKind,
+pub struct ProgressBarAuthenticator {
+    pub(crate) bar: ProgressBar,
 }
 
 impl ProgressBarAuthenticator {
-    fn new(kind: ProgressBarKind) -> Self {
-        Self { kind }
+    pub fn new(bar: ProgressBar) -> Self {
+        Self { bar }
     }
 }
 
 impl Prompter for ProgressBarAuthenticator {
+    #[instrument(skip(self, url, _config), level = "debug")]
     fn prompt_username_password(
         &mut self,
         url: &str,
         _config: &git2::Config,
     ) -> Option<(String, String)> {
-        let prompt = || -> Option<(String, String)> {
+        info!("authentication required at {url}");
+        self.bar.suspend(|| -> Option<(String, String)> {
             let username = Text::new("username").prompt().unwrap();
             let password = Password::new("password")
                 .without_confirmation()
                 .prompt()
                 .unwrap();
             Some((username, password))
-        };
-
-        match &self.kind {
-            ProgressBarKind::SingleBar(bar) => bar.suspend(prompt),
-            ProgressBarKind::MultiBar(bar) => bar.suspend(prompt),
-        }
+        })
     }
 
+    #[instrument(skip(self, username, url, _config), level = "debug")]
     fn prompt_password(
         &mut self,
         username: &str,
         url: &str,
         _config: &git2::Config,
     ) -> Option<String> {
-        let prompt = || -> Option<String> {
+        info!("authentication required at {url} for user {username}");
+        self.bar.suspend(|| -> Option<String> {
             let password = Password::new("password")
                 .without_confirmation()
                 .prompt()
                 .unwrap();
             Some(password)
-        };
-
-        match &self.kind {
-            ProgressBarKind::SingleBar(bar) => bar.suspend(prompt),
-            ProgressBarKind::MultiBar(bar) => bar.suspend(prompt),
-        }
+        })
     }
 
+    #[instrument(skip(self, ssh_key_path, _config), level = "debug")]
     fn prompt_ssh_key_passphrase(
         &mut self,
-        private_key_path: &Path,
-        _git_config: &git2::Config,
+        ssh_key_path: &Path,
+        _config: &git2::Config,
     ) -> Option<String> {
-        let prompt = || -> Option<String> {
+        info!(
+            "authentication required with ssh key at {}",
+            ssh_key_path.display()
+        );
+        self.bar.suspend(|| -> Option<String> {
             let password = Password::new("password")
                 .without_confirmation()
                 .prompt()
                 .unwrap();
             Some(password)
-        };
-
-        match &self.kind {
-            ProgressBarKind::MultiBar(bar) => bar.suspend(prompt),
-            ProgressBarKind::SingleBar(bar) => bar.suspend(prompt),
-        }
+        })
     }
-}
-
-#[derive(Clone)]
-enum ProgressBarKind {
-    SingleBar(ProgressBar),
-    MultiBar(MultiProgress),
 }
 
 fn syscall_non_interactive(
