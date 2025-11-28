@@ -37,7 +37,15 @@ pub struct Cluster {
 
 impl Cluster {
     pub fn try_new_init(path: impl AsRef<Path>) -> Result<Self> {
-        todo!();
+        let repository = Repository::init_bare(path)?;
+        let mut config = repository.config()?;
+        config.set_str("status.showUntrackedFiles", "no")?;
+        config.set_str("core.sparseScheckout", "true")?;
+
+        Ok(Self {
+            repository,
+            authenticator: GitAuthenticator::default(),
+        })
     }
 
     pub fn try_new_open(path: impl AsRef<Path>) -> Result<Self> {
