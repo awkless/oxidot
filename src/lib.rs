@@ -6,7 +6,12 @@ use auth_git2::{GitAuthenticator, Prompter};
 use git2::{build::RepoBuilder, Config, FetchOptions, RemoteCallbacks, Repository};
 use indicatif::ProgressBar;
 use inquire::{Password, Text};
-use std::{ffi::OsStr, path::Path, process::Command};
+use serde::Deserialize;
+use std::{
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
+    process::Command,
+};
 use tracing::{info, instrument};
 
 /// Cluster of dotfiles.
@@ -33,7 +38,7 @@ use tracing::{info, instrument};
 /// 1. [ArchWiki - dotfiles](https://wiki.archlinux.org/title/Dotfiles#Tracking_dotfiles_directly_with_Git)
 pub struct Cluster {
     repository: Repository,
-    authenticator: GitAuthenticator,
+    definition: ClusterDefinition,
 }
 
 impl Cluster {
@@ -43,9 +48,12 @@ impl Cluster {
         config.set_str("status.showUntrackedFiles", "no")?;
         config.set_str("core.sparseCheckout", "true")?;
 
+        let mut definition = ClusterDefinition::default();
+        definition.settings.worktree_alias = WorkTreeAlias::try_default()?;
+
         Ok(Self {
             repository,
-            authenticator: GitAuthenticator::default(),
+            definition,
         })
     }
 
@@ -61,10 +69,9 @@ impl Cluster {
             config.set_str("core.sparseCheckout", "true")?;
         }
 
-        Ok(Self {
-            repository,
-            authenticator: GitAuthenticator::default(),
-        })
+        // TODO: Implement way to extract cluster definition from repository.
+        let cluster = Self { repository, definition: ClusterDefinition::default() };
+        Ok(cluster)
     }
 
     pub fn try_new_clone(
@@ -93,10 +100,60 @@ impl Cluster {
             .fetch_options(fo)
             .clone(url.as_ref(), path.as_ref())?;
 
-        Ok(Self {
-            repository,
-            authenticator,
-        })
+        // TODO: Implement way to extract cluster definition from repository.
+        Ok(Self { repository, definition: ClusterDefinition::default() })
+    }
+
+    pub fn gitcall_non_interactive(
+        &self,
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Result<String> {
+        todo!();
+    }
+
+    fn expand_bin_args(
+        &self,
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Vec<OsString> {
+        todo!();
+    }
+}
+
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+pub struct ClusterDefinition {
+    pub settings: ClusterSettings,
+    pub dependencies: Option<Vec<ClusterDependency>>,
+}
+
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+pub struct ClusterSettings {
+    description: String,
+    url: String,
+    worktree_alias: WorkTreeAlias,
+    include: Option<Vec<String>>,
+}
+
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+pub struct ClusterDependency {
+    name: String,
+    url: String,
+    include: Option<Vec<String>>,
+}
+
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+pub struct WorkTreeAlias(pub PathBuf);
+
+impl WorkTreeAlias {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self(path.into())
+    }
+
+    pub fn try_default() -> Result<Self> {
+        Ok(Self(home_dir()?))
+    }
+
+    pub fn to_os_string(&self) -> OsString {
+        OsString::from(self.0.to_string_lossy().into_owned())
     }
 }
 
@@ -207,4 +264,8 @@ fn syscall_interactive(
     }
 
     Ok(())
+}
+
+fn home_dir() -> Result<PathBuf> {
+    dirs::home_dir().ok_or(anyhow!("cannot determine path to home directory"))
 }
