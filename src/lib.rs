@@ -82,33 +82,33 @@ impl Cluster {
         };
 
         let contents = toml::ser::to_string_pretty(&cluster.definition)?;
-        info!("stage and commit the following cluster definition:\n{}", contents);
-        cluster.stage_and_commit(
-            "cluster.toml",
-            contents,
-            format!("chore: add cluster.toml"),
-        )?;
+        info!(
+            "stage and commit the following cluster definition:\n{}",
+            contents
+        );
+        cluster.stage_and_commit("cluster.toml", contents, format!("chore: add cluster.toml"))?;
 
         Ok(cluster)
     }
 
+    #[instrument(skip(path), level = "debug")]
     pub fn try_new_open(path: impl AsRef<Path>) -> Result<Self> {
+        info!("open cluster: {:?}", path.as_ref().display());
         let repository = Repository::open(path)?;
-        let mut config = repository.config()?;
-
-        if config.get_str("status.showUntrackedFiles")? != "no" {
-            config.set_str("status.showUntrackedFiles", "no")?;
-        }
-
-        if config.get_str("core.sparseCheckout")? != "true" {
-            config.set_str("core.sparseCheckout", "true")?;
-        }
-
         let mut cluster = Self {
             repository,
             definition: ClusterDefinition::default(),
         };
         cluster.extract_cluster_definition()?;
+
+        let mut config = cluster.repository.config()?;
+        if cluster.get_config_value(&config, "status.showUntrackedFiles")? != Some("no".into()) {
+            config.set_str("status.showUntrackedFiles", "no")?;
+        }
+
+        if cluster.get_config_value(&config, "core.sparseCheckout")? != Some("true".into()) {
+            config.set_str("core.sparseCheckout", "true")?;
+        }
 
         Ok(cluster)
     }
@@ -260,6 +260,14 @@ impl Cluster {
         bin_args.extend(args.into_iter().map(Into::into));
 
         bin_args
+    }
+
+    fn get_config_value(&self, config: &git2::Config, key: &str) -> Result<Option<String>> {
+        match config.get_entry(key) {
+            Ok(entry) => Ok(entry.value().map(|v| v.to_string())),
+            Err(err) if err.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(err) => Err(anyhow!(err)),
+        }
     }
 }
 
