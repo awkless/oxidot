@@ -113,6 +113,14 @@ impl Cluster {
         Ok(cluster)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.repository.head()
+            .ok()
+            .and_then(|head| head.target())
+            .and_then(|oid| self.repository.find_commit(oid).ok())
+            .is_none()
+    }
+
     pub fn gitcall_non_interactive(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
