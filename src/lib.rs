@@ -117,7 +117,7 @@ impl Cluster {
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Result<String> {
-        todo!();
+        syscall_non_interactive("git", self.expand_bin_args(args))
     }
 
     fn extract_cluster_definition(&mut self) -> Result<()> {
@@ -137,7 +137,19 @@ impl Cluster {
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Vec<OsString> {
-        todo!();
+        let gitdir = self.repository.path().to_string_lossy().into_owned().into();
+        let path_args: Vec<OsString> = vec![
+            "--git-dir".into(),
+            gitdir,
+            "--work-tree".into(),
+            self.definition.settings.worktree_alias.to_os_string(),
+        ];
+
+        let mut bin_args: Vec<OsString> = Vec::new();
+        bin_args.extend(path_args);
+        bin_args.extend(args.into_iter().map(Into::into));
+
+        bin_args
     }
 }
 
