@@ -6,11 +6,11 @@ use auth_git2::{GitAuthenticator, Prompter};
 use git2::{
     build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, RemoteCallbacks, Repository,
 };
-use indicatif::ProgressBar;
+use indicatif::{MultiProgress, ProgressBar};
 use inquire::{Password, Text};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Command,
@@ -18,16 +18,14 @@ use std::{
 use tracing::{info, instrument};
 
 pub struct Store {
+    store_path: PathBuf,
     clusters: HashMap<String, Cluster>,
 }
 
 impl Store {
-    pub fn new(cluster_store: impl Into<PathBuf>) -> Result<Self> {
-        let pattern = cluster_store
-            .into()
-            .join("*.git")
-            .to_string_lossy()
-            .into_owned();
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self> {
+        let store_path = path.into();
+        let pattern = store_path.join("*.git").to_string_lossy().into_owned();
         let mut clusters = HashMap::new();
         for entry in glob::glob(pattern.as_str())? {
             // INVARIANT: The name of a cluster is the directory name minus the .git extension.
@@ -36,7 +34,57 @@ impl Store {
             clusters.insert(name, Cluster::try_new_open(path)?);
         }
 
-        Ok(Self { clusters })
+        // TODO: Add checks for valid cluster store structure at some point.
+        let store = Self { store_path, clusters, };
+        Ok(store)
+    }
+
+    pub fn resolve_dependencies(&mut self, cluster_name: impl AsRef<str>) -> Result<Vec<String>> {
+        let mut resolved = Vec::new();
+        let mut visited = HashSet::new();
+        let mut stack = VecDeque::new();
+        stack.push_back(cluster_name.as_ref().to_string());
+
+        while let Some(current) = stack.pop_back() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+
+            if !self.clusters.contains_key(&current) {
+                self.clone_missing_cluster(&current)?;
+            }
+
+            if let Some(cluster) = self.clusters.get(&current) {
+                resolved.push(current.clone());
+                if let Some(deps) = &cluster.definition.dependencies {
+                    for dep in deps {
+                        if !visited.contains(&dep.name) {
+                            stack.push_back(dep.name.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(resolved)
+    }
+
+    fn clone_missing_cluster(&mut self, name: impl AsRef<str>) -> Result<()> {
+        let dep_info = self.clusters
+            .values()
+            .flat_map(|c| c.definition.dependencies.iter().flatten())
+            .find(|d| d.name == name.as_ref())
+            .ok_or_else(|| anyhow!("dependency {:?} no declared", name.as_ref()))?;
+
+        let path = self.store_path.join(format!("{}.git", name.as_ref()));
+        let bars = MultiProgress::new();
+        let bar = bars.add(ProgressBar::no_length());
+        let auth_bar = ProgressBarAuthenticator::new(bar);
+
+        let cluster = Cluster::try_new_clone(&dep_info.url, path, auth_bar)?;
+        self.clusters.insert(name.as_ref().into(), cluster);
+
+        Ok(())
     }
 }
 
@@ -86,7 +134,7 @@ impl Cluster {
             "stage and commit the following cluster definition:\n{}",
             contents
         );
-        cluster.stage_and_commit("cluster.toml", contents, format!("chore: add cluster.toml"))?;
+        cluster.stage_and_commit("cluster.toml", contents, "chore: add cluster.toml")?;
 
         Ok(cluster)
     }
