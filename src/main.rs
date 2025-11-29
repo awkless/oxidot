@@ -5,7 +5,7 @@ use oxidot::{cluster_store_dir, Cluster, ClusterDefinition, WorkTreeAlias};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::{path::PathBuf, process::exit};
+use std::{ffi::OsString, path::PathBuf, process::exit};
 use tracing::error;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -26,6 +26,7 @@ impl Cli {
         match self.command {
             Command::Init(opts) => run_init(opts),
             Command::Clone(_opts) => run_clone(_opts),
+            Command::Git(opts) => run_git(opts),
         }
     }
 }
@@ -37,6 +38,9 @@ enum Command {
 
     #[command(override_usage = "oxidot clone [options] <url>")]
     Clone(CloneOptions),
+
+    #[command(external_subcommand)]
+    Git(Vec<OsString>),
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -67,7 +71,10 @@ fn main() {
     let filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("info"))
         .unwrap();
-    tracing_subscriber::registry().with(layer).with(filter).init();
+    tracing_subscriber::registry()
+        .with(layer)
+        .with(filter)
+        .init();
 
     if let Err(error) = run() {
         error!("{error:?}");
@@ -106,4 +113,12 @@ fn run_init(opts: InitOptions) -> Result<()> {
 
 fn run_clone(_opts: CloneOptions) -> Result<()> {
     todo!();
+}
+
+fn run_git(opts: Vec<OsString>) -> Result<()> {
+    // TODO: Allow for multiple clusters to be targeted.
+    let target = opts[0].to_string_lossy().into_owned();
+    let cluster = Cluster::try_new_open(cluster_store_dir()?.join(format!("{}.git", target)))?;
+    cluster.gitcall_interactive(opts[1..].to_vec())?;
+    Ok(())
 }
