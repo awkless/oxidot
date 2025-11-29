@@ -68,7 +68,9 @@ pub struct Cluster {
 }
 
 impl Cluster {
+    #[instrument(skip(path, definition), level = "debug")]
     pub fn try_new_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Self> {
+        info!("initialize new cluster: {:?}", path.as_ref().display());
         let repository = Repository::init_bare(path)?;
         let mut config = repository.config()?;
         config.set_str("status.showUntrackedFiles", "no")?;
@@ -78,10 +80,13 @@ impl Cluster {
             repository,
             definition,
         };
+
+        let contents = toml::ser::to_string_pretty(&cluster.definition)?;
+        info!("stage and commit the following cluster definition:\n{}", contents);
         cluster.stage_and_commit(
             "cluster.toml",
-            toml::ser::to_string_pretty(&cluster.definition)?,
-            format!("chore: add initial cluster.toml"),
+            contents,
+            format!("chore: add cluster.toml"),
         )?;
 
         Ok(cluster)
