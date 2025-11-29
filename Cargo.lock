@@ -690,6 +690,7 @@ dependencies = [
  "anyhow",
  "auth-git2",
  "clap",
+ "dirs",
  "git2",
  "indicatif",
  "inquire",
