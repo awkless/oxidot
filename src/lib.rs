@@ -120,6 +120,13 @@ impl Cluster {
         syscall_non_interactive("git", self.expand_bin_args(args))
     }
 
+    pub fn gitcall_interactive(
+        &self,
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Result<()> {
+        syscall_interactive("git", self.expand_bin_args(args))
+    }
+
     fn extract_cluster_definition(&mut self) -> Result<()> {
         let commit = self.repository.head()?.peel_to_commit()?;
         let tree = commit.tree()?;
