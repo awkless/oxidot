@@ -69,8 +69,12 @@ impl Cluster {
             config.set_str("core.sparseCheckout", "true")?;
         }
 
-        // TODO: Implement way to extract cluster definition from repository.
-        let cluster = Self { repository, definition: ClusterDefinition::default() };
+        let mut cluster = Self {
+            repository,
+            definition: ClusterDefinition::default(),
+        };
+        cluster.extract_cluster_definition()?;
+
         Ok(cluster)
     }
 
@@ -100,8 +104,13 @@ impl Cluster {
             .fetch_options(fo)
             .clone(url.as_ref(), path.as_ref())?;
 
-        // TODO: Implement way to extract cluster definition from repository.
-        Ok(Self { repository, definition: ClusterDefinition::default() })
+        let mut cluster = Self {
+            repository,
+            definition: ClusterDefinition::default(),
+        };
+        cluster.extract_cluster_definition()?;
+
+        Ok(cluster)
     }
 
     pub fn gitcall_non_interactive(
@@ -109,6 +118,19 @@ impl Cluster {
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Result<String> {
         todo!();
+    }
+
+    fn extract_cluster_definition(&mut self) -> Result<()> {
+        let commit = self.repository.head()?.peel_to_commit()?;
+        let tree = commit.tree()?;
+        let blob = tree
+            .get_name("cluster.toml")
+            .map(|entry| entry.to_object(&self.repository)?.peel_to_blob())
+            .ok_or(anyhow!("cluster has no definition file"))??;
+        let content = String::from_utf8_lossy(blob.content()).into_owned();
+        self.definition = toml::de::from_str::<ClusterDefinition>(&content)?;
+
+        Ok(())
     }
 
     fn expand_bin_args(
