@@ -3,10 +3,12 @@
 
 use anyhow::{anyhow, Result};
 use auth_git2::{GitAuthenticator, Prompter};
-use git2::{build::RepoBuilder, Config, FetchOptions, RemoteCallbacks, Repository};
+use git2::{
+    build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, RemoteCallbacks, Repository,
+};
 use indicatif::ProgressBar;
 use inquire::{Password, Text};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
@@ -21,7 +23,11 @@ pub struct Store {
 
 impl Store {
     pub fn new(cluster_store: impl Into<PathBuf>) -> Result<Self> {
-        let pattern = cluster_store.into().join("*.git").to_string_lossy().into_owned();
+        let pattern = cluster_store
+            .into()
+            .join("*.git")
+            .to_string_lossy()
+            .into_owned();
         let mut clusters = HashMap::new();
         for entry in glob::glob(pattern.as_str())? {
             // INVARIANT: The name of a cluster is the directory name minus the .git extension.
@@ -62,19 +68,23 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub fn try_new_init(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn try_new_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Self> {
         let repository = Repository::init_bare(path)?;
         let mut config = repository.config()?;
         config.set_str("status.showUntrackedFiles", "no")?;
         config.set_str("core.sparseCheckout", "true")?;
 
-        let mut definition = ClusterDefinition::default();
-        definition.settings.worktree_alias = WorkTreeAlias::try_default()?;
-
-        Ok(Self {
+        let cluster = Self {
             repository,
             definition,
-        })
+        };
+        cluster.stage_and_commit(
+            "cluster.toml",
+            toml::ser::to_string_pretty(&cluster.definition)?,
+            format!("chore: add initial cluster.toml"),
+        )?;
+
+        Ok(cluster)
     }
 
     pub fn try_new_open(path: impl AsRef<Path>) -> Result<Self> {
@@ -133,8 +143,68 @@ impl Cluster {
         Ok(cluster)
     }
 
+    pub fn stage_and_commit(
+        &self,
+        filename: impl AsRef<Path>,
+        contents: impl AsRef<str>,
+        message: impl AsRef<str>,
+    ) -> Result<()> {
+        let entry = IndexEntry {
+            ctime: IndexTime::new(0, 0),
+            mtime: IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: contents.as_ref().len() as u32,
+            id: self.repository.blob(contents.as_ref().as_bytes())?,
+            flags: 0,
+            flags_extended: 0,
+            path: filename
+                .as_ref()
+                .as_os_str()
+                .to_string_lossy()
+                .into_owned()
+                .as_bytes()
+                .to_vec(),
+        };
+
+        // INVARIANT: Always use new tree produced by index after staging new entry.
+        let mut index = self.repository.index()?;
+        index.add_frombuffer(&entry, contents.as_ref().as_bytes())?;
+        let tree_oid = index.write_tree()?;
+        let tree = self.repository.find_tree(tree_oid)?;
+
+        // INVARIANT: Always determine latest parent commits to append to.
+        let signature = self.repository.signature()?;
+        let mut parents = Vec::new();
+        if let Some(parent) = self
+            .repository
+            .head()
+            .ok()
+            .map(|head| head.target().unwrap())
+        {
+            parents.push(self.repository.find_commit(parent)?);
+        }
+        let parents = parents.iter().collect::<Vec<_>>();
+
+        // INVARIANT: Commit to HEAD by appending to obtained parent commits.
+        self.repository.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message.as_ref(),
+            &tree,
+            &parents,
+        )?;
+
+        Ok(())
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.repository.head()
+        self.repository
+            .head()
             .ok()
             .and_then(|head| head.target())
             .and_then(|oid| self.repository.find_commit(oid).ok())
@@ -177,7 +247,7 @@ impl Cluster {
             "--git-dir".into(),
             gitdir,
             "--work-tree".into(),
-            self.definition.settings.worktree_alias.to_os_string(),
+            self.definition.settings.work_tree_alias.to_os_string(),
         ];
 
         let mut bin_args: Vec<OsString> = Vec::new();
@@ -188,29 +258,29 @@ impl Cluster {
     }
 }
 
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct ClusterDefinition {
     pub settings: ClusterSettings,
     pub dependencies: Option<Vec<ClusterDependency>>,
 }
 
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct ClusterSettings {
-    description: String,
-    url: String,
-    worktree_alias: WorkTreeAlias,
-    include: Option<Vec<String>>,
+    pub description: String,
+    pub url: String,
+    pub work_tree_alias: WorkTreeAlias,
+    pub include: Option<Vec<String>>,
 }
 
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct ClusterDependency {
-    name: String,
-    url: String,
-    include: Option<Vec<String>>,
+    pub name: String,
+    pub url: String,
+    pub include: Option<Vec<String>>,
 }
 
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
-pub struct WorkTreeAlias(pub(crate) PathBuf);
+#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+pub struct WorkTreeAlias(pub PathBuf);
 
 impl WorkTreeAlias {
     pub fn new(path: impl Into<PathBuf>) -> Self {
