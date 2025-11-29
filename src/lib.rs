@@ -8,11 +8,31 @@ use indicatif::ProgressBar;
 use inquire::{Password, Text};
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Command,
 };
 use tracing::{info, instrument};
+
+pub struct Store {
+    clusters: HashMap<String, Cluster>,
+}
+
+impl Store {
+    pub fn new(cluster_store: impl Into<PathBuf>) -> Result<Self> {
+        let pattern = cluster_store.into().join("*.git").to_string_lossy().into_owned();
+        let mut clusters = HashMap::new();
+        for entry in glob::glob(pattern.as_str())? {
+            // INVARIANT: The name of a cluster is the directory name minus the .git extension.
+            let path = entry?;
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            clusters.insert(name, Cluster::try_new_open(path)?);
+        }
+
+        Ok(Self { clusters })
+    }
+}
 
 /// Cluster of dotfiles.
 ///
@@ -190,7 +210,7 @@ pub struct ClusterDependency {
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize)]
-pub struct WorkTreeAlias(pub PathBuf);
+pub struct WorkTreeAlias(pub(crate) PathBuf);
 
 impl WorkTreeAlias {
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -272,6 +292,16 @@ impl Prompter for ProgressBarAuthenticator {
     }
 }
 
+pub fn home_dir() -> Result<PathBuf> {
+    dirs::home_dir().ok_or(anyhow!("cannot determine path to home directory"))
+}
+
+pub fn cluster_store_dir() -> Result<PathBuf> {
+    dirs::data_dir()
+        .map(|path| path.join("oxidot-store"))
+        .ok_or(anyhow!("cannot determine path to cluster store"))
+}
+
 fn syscall_non_interactive(
     cmd: impl AsRef<OsStr>,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
@@ -313,8 +343,4 @@ fn syscall_interactive(
     }
 
     Ok(())
-}
-
-fn home_dir() -> Result<PathBuf> {
-    dirs::home_dir().ok_or(anyhow!("cannot determine path to home directory"))
 }
