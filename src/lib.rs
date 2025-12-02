@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2025 Jason Pena <jasonpena@awkless.com>
+// SPDX-FileCopyrightText: 2024-2025 Eric Urban <hydrogen18@gmail.com>
 // SPDX-License-Identifier: MIT
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use auth_git2::{GitAuthenticator, Prompter};
 use git2::{
     build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, ObjectType, RemoteCallbacks,
@@ -74,6 +75,12 @@ impl Store {
 
     pub fn insert(&mut self, name: impl Into<String>, cluster: Cluster) -> Option<Cluster> {
         self.clusters.insert(name.into(), cluster)
+    }
+
+    pub fn get(&self, name: impl AsRef<str>) -> Result<&Cluster> {
+        self.clusters
+            .get(name.as_ref())
+            .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
     }
 
     pub fn resolve_dependencies(&mut self, cluster_name: impl AsRef<str>) -> Result<Vec<String>> {
@@ -163,7 +170,7 @@ impl Cluster {
         let mut config = repository.config()?;
         config.set_str("status.showUntrackedFiles", "no")?;
         config.set_str("core.sparseCheckout", "true")?;
-        let sparse_checkout = SparseCheckout::new(path.as_ref());
+        let sparse_checkout = SparseCheckout::new(path.as_ref())?;
 
         let cluster = Self {
             repository,
@@ -184,11 +191,11 @@ impl Cluster {
     #[instrument(skip(path), level = "debug")]
     pub fn try_new_open(path: impl AsRef<Path>) -> Result<Self> {
         info!("open cluster: {:?}", path.as_ref().display());
-        let repository = Repository::open(path)?;
+        let repository = Repository::open(path.as_ref())?;
         let mut cluster = Self {
             repository,
             definition: ClusterDefinition::default(),
-            sparse_checkout: SparseCheckout::default(),
+            sparse_checkout: SparseCheckout::new(path.as_ref())?,
         };
         cluster.extract_cluster_definition()?;
 
@@ -233,7 +240,7 @@ impl Cluster {
         let mut cluster = Self {
             repository,
             definition: ClusterDefinition::default(),
-            sparse_checkout: SparseCheckout::default(),
+            sparse_checkout: SparseCheckout::new(path.as_ref())?,
         };
         cluster.extract_cluster_definition()?;
 
@@ -301,7 +308,7 @@ impl Cluster {
 
     #[instrument(skip(self, rules), level = "debug")]
     pub fn deploy_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        info!("deploy all of {:?}", self.repository.path().display());
+        info!("deploy {:?}", self.repository.path().display());
         if self.is_empty() {
             warn!("cluster {:?} is empty", self.repository.path().display());
             return Ok(());
@@ -317,7 +324,10 @@ impl Cluster {
     #[instrument(skip(self), level = "debug")]
     pub fn undeploy_all(&self) -> Result<()> {
         if !self.is_deployed()? {
-            warn!("cluster {:?} already undeployed in full", self.repository.path().display());
+            warn!(
+                "cluster {:?} already undeployed in full",
+                self.repository.path().display()
+            );
             return Ok(());
         }
 
@@ -479,15 +489,18 @@ impl WorkTreeAlias {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct SparseCheckout {
     sparse_path: PathBuf,
 }
 
 impl SparseCheckout {
-    pub fn new(gitdir: impl Into<PathBuf>) -> Self {
+    pub fn new(gitdir: impl Into<PathBuf>) -> Result<Self> {
         let sparse_path = gitdir.into().join("info").join("sparse-checkout");
-        Self { sparse_path }
+        let sparse_checkout = Self { sparse_path };
+        sparse_checkout.clear_rules()?;
+
+        Ok(sparse_checkout)
     }
 
     pub fn insert_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
@@ -500,10 +513,14 @@ impl SparseCheckout {
             .create(true)
             .read(true)
             .write(true)
-            .open(&self.sparse_path)?;
+            .open(&self.sparse_path)
+            .with_context(|| {
+                anyhow!("failed to create or open {:?}", self.sparse_path.display())
+            })?;
 
         let mut rule_set = String::new();
-        file.read_to_string(&mut rule_set)?;
+        file.read_to_string(&mut rule_set)
+            .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
         rule_set.push_str(new_rules.as_str());
 
         // INVARIANT: Remove duplicate sparsity rules.
@@ -513,7 +530,12 @@ impl SparseCheckout {
             .filter(|line| seen.insert(*line))
             .collect::<Vec<_>>()
             .join("\n");
-        file.write_all(rule_set.as_bytes())?;
+        file.write_all(rule_set.as_bytes()).with_context(|| {
+            anyhow!(
+                "failed to write sparsity rules to {:?}",
+                self.sparse_path.display()
+            )
+        })?;
 
         Ok(())
     }
@@ -522,8 +544,13 @@ impl SparseCheckout {
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&self.sparse_path)?;
-        file.write_all(b"")?;
+            .open(&self.sparse_path)
+            .with_context(|| {
+                anyhow!("failed to create or open {:?}", self.sparse_path.display())
+            })?;
+        file.write_all(b"").with_context(|| {
+            anyhow!("failed to clear rules in {:?}", self.sparse_path.display())
+        })?;
 
         Ok(())
     }
