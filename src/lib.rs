@@ -14,9 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
-    fmt::Write as FmtWrite,
-    fs::OpenOptions,
-    io::{BufRead, BufReader, Read as IoRead, Write as IoWrite},
+    fmt::Write,
+    fs::{read_to_string, write, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -80,6 +79,12 @@ impl Store {
     pub fn get(&self, name: impl AsRef<str>) -> Result<&Cluster> {
         self.clusters
             .get(name.as_ref())
+            .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
+    }
+
+    pub fn get_mut(&mut self, name: impl AsRef<str>) -> Result<&mut Cluster> {
+        self.clusters
+            .get_mut(name.as_ref())
             .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
     }
 
@@ -373,6 +378,14 @@ impl Cluster {
         Ok(true)
     }
 
+    #[instrument(skip(self), level = "debug")]
+    pub fn show_deploy_rules(&self) -> Result<()> {
+        let rules = self.sparse_checkout.current_rules()?;
+        info!("current sparisty rules {rules:#?}");
+
+        Ok(())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.repository
             .head()
@@ -503,7 +516,7 @@ impl WorkTreeAlias {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SparseCheckout {
     sparse_path: PathBuf,
 }
@@ -511,40 +524,41 @@ pub struct SparseCheckout {
 impl SparseCheckout {
     pub fn new(gitdir: impl Into<PathBuf>) -> Result<Self> {
         let sparse_path = gitdir.into().join("info").join("sparse-checkout");
-        let sparse_checkout = Self { sparse_path };
-        sparse_checkout.clear_rules()?;
 
-        Ok(sparse_checkout)
+        // INVARIANT: Create sparse checkout file if needed.
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&sparse_path)
+            .with_context(|| anyhow!("failed to create {:?}", sparse_path.display()))?;
+
+        Ok(Self { sparse_path })
     }
 
     pub fn insert_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        let new_rules = rules.into_iter().fold(String::new(), |mut acc, u| {
-            writeln!(&mut acc, "{}", u.into()).unwrap();
-            acc
-        });
-
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&self.sparse_path)
-            .with_context(|| {
-                anyhow!("failed to create or open {:?}", self.sparse_path.display())
-            })?;
-
-        let mut rule_set = String::new();
-        file.read_to_string(&mut rule_set)
+        let new_rules: Vec<String> = rules.into_iter().map(|r| r.into()).collect();
+        let mut rule_set = read_to_string(&self.sparse_path)
             .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
-        rule_set.push_str(new_rules.as_str());
 
-        // INVARIANT: Remove duplicate sparsity rules.
+        for rule in new_rules {
+            writeln!(&mut rule_set, "{}", rule).unwrap();
+        }
+
         let mut seen = HashSet::new();
         let rule_set = rule_set
             .lines()
             .filter(|line| seen.insert(*line))
             .collect::<Vec<_>>()
             .join("\n");
-        file.write_all(rule_set.as_bytes()).with_context(|| {
+
+	let rule_set = if rule_set.is_empty() {
+	    rule_set
+	} else {
+	    format!("{}\n", rule_set)
+	};
+
+        write(&self.sparse_path, rule_set.as_bytes()).with_context(|| {
             anyhow!(
                 "failed to write sparsity rules to {:?}",
                 self.sparse_path.display()
@@ -555,46 +569,37 @@ impl SparseCheckout {
     }
 
     pub fn remove_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        let old_rules = rules
-            .into_iter()
-            .map(|rule| rule.into())
-            .collect::<HashSet<_>>();
+        let old_rules: HashSet<String> = rules.into_iter().map(|rule| rule.into()).collect();
+        let content = read_to_string(&self.sparse_path)
+            .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&self.sparse_path)
-            .with_context(|| {
-                anyhow!("failed to create or open {:?}", self.sparse_path.display())
-            })?;
-        let reader = BufReader::new(&file);
-        let mut rules = reader.lines().into_iter().flatten().collect::<Vec<_>>();
-        let _ = rules.extract_if(.., |rule| old_rules.contains(rule));
+        let filtered: Vec<&str> = content
+            .lines()
+            .filter(|line| !old_rules.contains(*line))
+            .collect();
 
-        file.write_all(
-            rules
-                .into_iter()
-                .fold(String::new(), |mut acc, u| {
-                    writeln!(&mut acc, "{u}").unwrap();
-                    acc
-                })
-                .as_bytes(),
-        )
-        .with_context(|| anyhow!("failed to remove rules in {:?}", self.sparse_path.display()))?;
+	let result = if filtered.is_empty() {
+	    String::new()
+	} else {
+	    format!("{}\n", filtered.join("\n"))
+	};
+
+        write(&self.sparse_path, result.as_bytes()).with_context(|| {
+            anyhow!("failed to remove rules in {:?}", self.sparse_path.display())
+        })?;
 
         Ok(())
     }
 
+    pub fn current_rules(&self) -> Result<Vec<String>> {
+        let content = read_to_string(&self.sparse_path)
+            .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
+
+        Ok(content.lines().map(String::from).collect())
+    }
+
     pub fn clear_rules(&self) -> Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(&self.sparse_path)
-            .with_context(|| {
-                anyhow!("failed to create or open {:?}", self.sparse_path.display())
-            })?;
-        file.write_all(b"").with_context(|| {
+        write(&self.sparse_path, b"").with_context(|| {
             anyhow!("failed to clear rules in {:?}", self.sparse_path.display())
         })?;
 
