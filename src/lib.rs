@@ -4,7 +4,8 @@
 use anyhow::{anyhow, Result};
 use auth_git2::{GitAuthenticator, Prompter};
 use git2::{
-    build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, RemoteCallbacks, Repository,
+    build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, ObjectType, RemoteCallbacks,
+    Repository,
 };
 use indicatif::{MultiProgress, ProgressBar};
 use inquire::{Password, Text};
@@ -12,11 +13,40 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
+    fmt::Write as FmtWrite,
+    fs::OpenOptions,
+    io::{Read as IoRead, Write as IoWrite},
     path::{Path, PathBuf},
     process::Command,
 };
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
+/// Cluster store management.
+///
+/// Oxidot keeps track of available clusters through a __cluster store__. The
+/// cluster store is just a basic external directory where all of the clusters
+/// are kept for easy access.
+///
+/// # Naming Conventions
+///
+/// Each entry in the cluster store comes with a ".git" extension. The
+/// name of each cluster is just the name of directory stored in the cluster
+/// store itself. Thus, a cluster named "editor" will have a corresponding
+/// bare-alias repository in the cluster store as "editor.git".
+///
+/// Oxidot only considers the top-level of the cluster store when processing
+/// cluster data. Thus, it is not possible for oxidot to detect nested clusters.
+///
+/// # Cluster Store Location
+///
+/// The cluster store can be placed pretty much anywhere the caller wants within
+/// their filesystem. At least when it comes to this API. Typically, as a
+/// default path, oxidot idiomatically prefers `$XDG_DATA_HOME/oxidot-store`.
+/// However, that is definitely a preference, and not a hard coded rule.
+///
+/// # See Also
+///
+/// 1. [`Cluster`](struct.Cluster)
 pub struct Store {
     store_path: PathBuf,
     clusters: HashMap<String, Cluster>,
@@ -35,8 +65,15 @@ impl Store {
         }
 
         // TODO: Add checks for valid cluster store structure at some point.
-        let store = Self { store_path, clusters, };
+        let store = Self {
+            store_path,
+            clusters,
+        };
         Ok(store)
+    }
+
+    pub fn insert(&mut self, name: impl Into<String>, cluster: Cluster) -> Option<Cluster> {
+        self.clusters.insert(name.into(), cluster)
     }
 
     pub fn resolve_dependencies(&mut self, cluster_name: impl AsRef<str>) -> Result<Vec<String>> {
@@ -70,7 +107,8 @@ impl Store {
     }
 
     fn clone_missing_cluster(&mut self, name: impl AsRef<str>) -> Result<()> {
-        let dep_info = self.clusters
+        let dep_info = self
+            .clusters
             .values()
             .flat_map(|c| c.definition.dependencies.iter().flatten())
             .find(|d| d.name == name.as_ref())
@@ -79,9 +117,10 @@ impl Store {
         let path = self.store_path.join(format!("{}.git", name.as_ref()));
         let bars = MultiProgress::new();
         let bar = bars.add(ProgressBar::no_length());
-        let auth_bar = ProgressBarAuthenticator::new(bar);
+        let auth_bar = ProgressBarAuthenticator::new(bar.clone());
 
         let cluster = Cluster::try_new_clone(&dep_info.url, path, auth_bar)?;
+        bar.finish_and_clear();
         self.clusters.insert(name.as_ref().into(), cluster);
 
         Ok(())
@@ -113,20 +152,23 @@ impl Store {
 pub struct Cluster {
     repository: Repository,
     definition: ClusterDefinition,
+    sparse_checkout: SparseCheckout,
 }
 
 impl Cluster {
     #[instrument(skip(path, definition), level = "debug")]
     pub fn try_new_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Self> {
         info!("initialize new cluster: {:?}", path.as_ref().display());
-        let repository = Repository::init_bare(path)?;
+        let repository = Repository::init_bare(path.as_ref())?;
         let mut config = repository.config()?;
         config.set_str("status.showUntrackedFiles", "no")?;
         config.set_str("core.sparseCheckout", "true")?;
+        let sparse_checkout = SparseCheckout::new(path.as_ref());
 
         let cluster = Self {
             repository,
             definition,
+            sparse_checkout,
         };
 
         let contents = toml::ser::to_string_pretty(&cluster.definition)?;
@@ -146,6 +188,7 @@ impl Cluster {
         let mut cluster = Self {
             repository,
             definition: ClusterDefinition::default(),
+            sparse_checkout: SparseCheckout::default(),
         };
         cluster.extract_cluster_definition()?;
 
@@ -190,6 +233,7 @@ impl Cluster {
         let mut cluster = Self {
             repository,
             definition: ClusterDefinition::default(),
+            sparse_checkout: SparseCheckout::default(),
         };
         cluster.extract_cluster_definition()?;
 
@@ -255,6 +299,56 @@ impl Cluster {
         Ok(())
     }
 
+    #[instrument(skip(self, rules), level = "debug")]
+    pub fn deploy_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
+        info!("deploy all of {:?}", self.repository.path().display());
+        if self.is_empty() {
+            warn!("cluster {:?} is empty", self.repository.path().display());
+            return Ok(());
+        }
+
+        self.sparse_checkout.insert_rules(rules)?;
+        let output = self.gitcall_non_interactive(["checkout"])?;
+        info!("{output}");
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    pub fn undeploy_all(&self) -> Result<()> {
+        if !self.is_deployed()? {
+            warn!("cluster {:?} already undeployed in full", self.repository.path().display());
+            return Ok(());
+        }
+
+        self.sparse_checkout.clear_rules()?;
+        let output = self.gitcall_non_interactive(["checkout"])?;
+        info!("{output}");
+
+        Ok(())
+    }
+
+    pub fn is_deployed(&self) -> Result<bool> {
+        if self.is_empty() {
+            return Ok(false);
+        }
+
+        let entries: Vec<String> = self
+            .list_file_paths()?
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+
+        for entry in entries {
+            let path = self.definition.settings.work_tree_alias.0.join(entry);
+            if !path.exists() {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.repository
             .head()
@@ -317,6 +411,34 @@ impl Cluster {
             Err(err) => Err(anyhow!(err)),
         }
     }
+
+    // Thank you Eric at https://www.hydrogen18.com/blog/list-all-files-git-repo-pygit2.html.
+    fn list_file_paths(&self) -> Result<Vec<PathBuf>> {
+        let mut entries = Vec::new();
+        let commit = self.repository.head()?.peel_to_commit()?;
+        let tree = commit.tree()?;
+        let mut trees_and_paths = VecDeque::new();
+        trees_and_paths.push_front((tree, PathBuf::new()));
+
+        while let Some((tree, path)) = trees_and_paths.pop_front() {
+            for tree_entry in &tree {
+                match tree_entry.kind() {
+                    Some(ObjectType::Tree) => {
+                        let next_tree = self.repository.find_tree(tree_entry.id())?;
+                        let next_path = path.join(bytes_to_path(tree_entry.name_bytes()));
+                        trees_and_paths.push_front((next_tree, next_path));
+                    }
+                    Some(ObjectType::Blob) => {
+                        let full_path = path.join(bytes_to_path(tree_entry.name_bytes()));
+                        entries.push(full_path);
+                    }
+                    _ => continue,
+                }
+            }
+        }
+
+        Ok(entries)
+    }
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
@@ -354,6 +476,56 @@ impl WorkTreeAlias {
 
     pub fn to_os_string(&self) -> OsString {
         OsString::from(self.0.to_string_lossy().into_owned())
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SparseCheckout {
+    sparse_path: PathBuf,
+}
+
+impl SparseCheckout {
+    pub fn new(gitdir: impl Into<PathBuf>) -> Self {
+        let sparse_path = gitdir.into().join("info").join("sparse-checkout");
+        Self { sparse_path }
+    }
+
+    pub fn insert_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
+        let new_rules = rules.into_iter().fold(String::new(), |mut acc, u| {
+            writeln!(&mut acc, "{}", u.into()).unwrap();
+            acc
+        });
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&self.sparse_path)?;
+
+        let mut rule_set = String::new();
+        file.read_to_string(&mut rule_set)?;
+        rule_set.push_str(new_rules.as_str());
+
+        // INVARIANT: Remove duplicate sparsity rules.
+        let mut seen = HashSet::new();
+        let rule_set = rule_set
+            .lines()
+            .filter(|line| seen.insert(*line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        file.write_all(rule_set.as_bytes())?;
+
+        Ok(())
+    }
+
+    pub fn clear_rules(&self) -> Result<()> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&self.sparse_path)?;
+        file.write_all(b"")?;
+
+        Ok(())
     }
 }
 
@@ -474,4 +646,19 @@ fn syscall_interactive(
     }
 
     Ok(())
+}
+
+// Thanks from:
+//
+// https://github.com/rust-lang/git2-rs/blob/5bc3baa9694a94db2ca9cc256b5bce8a215f9013/
+// src/util.rs#L85
+#[cfg(unix)]
+fn bytes_to_path(bytes: &[u8]) -> &Path {
+    use std::os::unix::prelude::*;
+    Path::new(OsStr::from_bytes(bytes))
+}
+#[cfg(windows)]
+fn bytes_to_path(byts: &[u8]) -> PathBuf {
+    use std::str;
+    Path::new(str::from_utf8(bytes).unwrap())
 }
