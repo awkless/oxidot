@@ -28,7 +28,8 @@ impl Cli {
     fn run(self) -> Result<()> {
         match self.command {
             Command::Init(opts) => run_init(opts),
-            Command::Clone(_opts) => run_clone(_opts),
+            Command::Clone(opts) => run_clone(opts),
+            Command::Deploy(opts) => run_deploy(opts),
             Command::Git(opts) => run_git(opts),
         }
     }
@@ -41,6 +42,9 @@ enum Command {
 
     #[command(override_usage = "oxidot clone [options] <url>")]
     Clone(CloneOptions),
+
+    #[command(override_usage = "oxidot deploy [options] <cluster_name> [<sparsity_rules>]...")]
+    Deploy(DeployOptions),
 
     #[command(external_subcommand)]
     Git(Vec<OsString>),
@@ -70,6 +74,16 @@ struct CloneOptions {
 
     #[arg(required = true, value_name = "url")]
     pub url: String,
+}
+
+#[derive(Parser, Clone, Debug)]
+#[command(author, about, long_about)]
+struct DeployOptions {
+    #[arg(required = true, value_name = "name")]
+    pub cluster_name: String,
+
+    #[arg(required = true, value_name = "name")]
+    pub sparsity_rules: Vec<String>,
 }
 
 fn main() {
@@ -128,6 +142,14 @@ fn run_clone(opts: CloneOptions) -> Result<()> {
     let cluster = Cluster::try_new_clone(&opts.url, path, auth_bar)?;
     store.insert(&opts.name, cluster);
     store.resolve_dependencies(&opts.name)?;
+
+    Ok(())
+}
+
+fn run_deploy(opts: DeployOptions) -> Result<()> {
+    let store = Store::new(cluster_store_dir()?)?;
+    let cluster = store.get(&opts.cluster_name)?;
+    cluster.deploy_rules(opts.sparsity_rules)?;
 
     Ok(())
 }
