@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2025 Jason Pena <jasonpena@awkless.com>
 // SPDX-License-Identifier: MIT
 
-use oxidot::{cluster_store_dir, Cluster, ClusterDefinition, WorkTreeAlias};
+use oxidot::{
+    cluster_store_dir, Cluster, ClusterDefinition, ProgressBarAuthenticator, Store, WorkTreeAlias,
+};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use indicatif::{MultiProgress, ProgressBar};
 use std::{ffi::OsString, path::PathBuf, process::exit};
 use tracing::error;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -62,7 +65,10 @@ struct InitOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct CloneOptions {
-    #[arg(value_name = "url")]
+    #[arg(required = true, value_name = "name")]
+    pub name: String,
+
+    #[arg(required = true, value_name = "url")]
     pub url: String,
 }
 
@@ -111,8 +117,19 @@ fn run_init(opts: InitOptions) -> Result<()> {
     Ok(())
 }
 
-fn run_clone(_opts: CloneOptions) -> Result<()> {
-    todo!();
+fn run_clone(opts: CloneOptions) -> Result<()> {
+    let mut store = Store::new(cluster_store_dir()?)?;
+
+    let path = cluster_store_dir()?.join(format!("{}.git", &opts.name));
+    let bars = MultiProgress::new();
+    let bar = bars.add(ProgressBar::no_length());
+    let auth_bar = ProgressBarAuthenticator::new(bar);
+
+    let cluster = Cluster::try_new_clone(&opts.url, path, auth_bar)?;
+    store.insert(&opts.name, cluster);
+    store.resolve_dependencies(&opts.name)?;
+
+    Ok(())
 }
 
 fn run_git(opts: Vec<OsString>) -> Result<()> {
@@ -120,5 +137,6 @@ fn run_git(opts: Vec<OsString>) -> Result<()> {
     let target = opts[0].to_string_lossy().into_owned();
     let cluster = Cluster::try_new_open(cluster_store_dir()?.join(format!("{}.git", target)))?;
     cluster.gitcall_interactive(opts[1..].to_vec())?;
+
     Ok(())
 }
