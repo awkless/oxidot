@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     fmt::Write,
-    fs::{read_to_string, write, OpenOptions},
+    fs::{remove_dir_all, read_to_string, write, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -74,6 +74,18 @@ impl Store {
 
     pub fn insert(&mut self, name: impl Into<String>, cluster: Cluster) -> Option<Cluster> {
         self.clusters.insert(name.into(), cluster)
+    }
+
+    #[instrument(skip(self, name), level = "debug")]
+    pub fn remove(&mut self, name: impl AsRef<str>) -> Result<Cluster> {
+        info!("remove {:?} from cluster store", name.as_ref());
+        let cluster_path = self.store_path.join(format!("{}.git", name.as_ref()));
+        remove_dir_all(&cluster_path)
+            .with_context(|| anyhow!("failed to remove {:?} from store", name.as_ref()))?;
+
+        self.clusters
+            .remove(name.as_ref())
+            .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
     }
 
     pub fn get(&self, name: impl AsRef<str>) -> Result<&Cluster> {
@@ -395,6 +407,10 @@ impl Cluster {
             .is_none()
     }
 
+    pub fn path(&self) -> &Path {
+        self.repository.path()
+    }
+
     pub fn gitcall_non_interactive(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -552,11 +568,11 @@ impl SparseCheckout {
             .collect::<Vec<_>>()
             .join("\n");
 
-	let rule_set = if rule_set.is_empty() {
-	    rule_set
-	} else {
-	    format!("{}\n", rule_set)
-	};
+        let rule_set = if rule_set.is_empty() {
+            rule_set
+        } else {
+            format!("{}\n", rule_set)
+        };
 
         write(&self.sparse_path, rule_set.as_bytes()).with_context(|| {
             anyhow!(
@@ -578,11 +594,11 @@ impl SparseCheckout {
             .filter(|line| !old_rules.contains(*line))
             .collect();
 
-	let result = if filtered.is_empty() {
-	    String::new()
-	} else {
-	    format!("{}\n", filtered.join("\n"))
-	};
+        let result = if filtered.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", filtered.join("\n"))
+        };
 
         write(&self.sparse_path, result.as_bytes()).with_context(|| {
             anyhow!("failed to remove rules in {:?}", self.sparse_path.display())
