@@ -32,6 +32,7 @@ impl Cli {
             Command::Deploy(opts) => run_deploy(opts),
             Command::Undeploy(opts) => run_undeploy(opts),
             Command::List(opts) => run_list(opts),
+            Command::Remove(opts) => run_remove(opts),
             Command::Git(opts) => run_git(opts),
         }
     }
@@ -53,6 +54,9 @@ enum Command {
 
     #[command(override_usage = "oxidot list [options]")]
     List(ListOptions),
+
+    #[command(override_usage = "oxidot remove [options] <cluster_name>")]
+    Remove(RemoveOptions),
 
     #[command(external_subcommand)]
     Git(Vec<OsString>),
@@ -109,6 +113,13 @@ struct UndeployOptions {
 struct ListOptions {
     #[arg(short, long, value_name = "cluster_name")]
     pub deploy_rules: Option<String>,
+}
+
+#[derive(Parser, Clone, Debug)]
+#[command(author, about, long_about)]
+struct RemoveOptions {
+    #[arg(required = true)]
+    pub cluster_name: String,
 }
 
 fn main() {
@@ -193,6 +204,13 @@ fn run_list(opts: ListOptions) -> Result<()> {
         let cluster = store.get(cluster_name)?;
         cluster.show_deploy_rules()?;
     }
+    Ok(())
+}
+
+fn run_remove(opts: RemoveOptions) -> Result<()> {
+    let mut store = Store::new(cluster_store_dir()?)?;
+    store.remove(opts.cluster_name)?;
+
     Ok(())
 }
 
