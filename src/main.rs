@@ -30,6 +30,7 @@ impl Cli {
             Command::Init(opts) => run_init(opts),
             Command::Clone(opts) => run_clone(opts),
             Command::Deploy(opts) => run_deploy(opts),
+            Command::Undeploy(opts) => run_undeploy(opts),
             Command::Git(opts) => run_git(opts),
         }
     }
@@ -45,6 +46,9 @@ enum Command {
 
     #[command(override_usage = "oxidot deploy [options] <cluster_name> [<sparsity_rules>]...")]
     Deploy(DeployOptions),
+
+    #[command(override_usage = "oxidot undeploy [options] <cluster_name> [<sparsity_rules>]...")]
+    Undeploy(UndeployOptions),
 
     #[command(external_subcommand)]
     Git(Vec<OsString>),
@@ -79,6 +83,16 @@ struct CloneOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct DeployOptions {
+    #[arg(required = true, value_name = "name")]
+    pub cluster_name: String,
+
+    #[arg(required = true, value_name = "name")]
+    pub sparsity_rules: Vec<String>,
+}
+
+#[derive(Parser, Clone, Debug)]
+#[command(author, about, long_about)]
+struct UndeployOptions {
     #[arg(required = true, value_name = "name")]
     pub cluster_name: String,
 
@@ -150,6 +164,14 @@ fn run_deploy(opts: DeployOptions) -> Result<()> {
     let store = Store::new(cluster_store_dir()?)?;
     let cluster = store.get(&opts.cluster_name)?;
     cluster.deploy_rules(opts.sparsity_rules)?;
+
+    Ok(())
+}
+
+fn run_undeploy(opts: UndeployOptions) -> Result<()> {
+    let store = Store::new(cluster_store_dir()?)?;
+    let cluster = store.get(&opts.cluster_name)?;
+    cluster.undeploy_rules(opts.sparsity_rules)?;
 
     Ok(())
 }

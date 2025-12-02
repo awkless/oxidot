@@ -16,7 +16,7 @@ use std::{
     ffi::{OsStr, OsString},
     fmt::Write as FmtWrite,
     fs::OpenOptions,
-    io::{Read as IoRead, Write as IoWrite},
+    io::{BufRead, BufReader, Read as IoRead, Write as IoWrite},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -321,6 +321,20 @@ impl Cluster {
         Ok(())
     }
 
+    #[instrument(skip(self, rules), level = "debug")]
+    pub fn undeploy_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
+        info!("undeploy {:?}", self.repository.path().display());
+        if self.is_empty() {
+            warn!("cluster {:?} is empty", self.repository.path().display());
+            return Ok(());
+        }
+
+        self.sparse_checkout.remove_rules(rules)?;
+        let output = self.gitcall_non_interactive(["checkout"])?;
+        info!("{output}");
+        Ok(())
+    }
+
     #[instrument(skip(self), level = "debug")]
     pub fn undeploy_all(&self) -> Result<()> {
         if !self.is_deployed()? {
@@ -536,6 +550,38 @@ impl SparseCheckout {
                 self.sparse_path.display()
             )
         })?;
+
+        Ok(())
+    }
+
+    pub fn remove_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
+        let old_rules = rules
+            .into_iter()
+            .map(|rule| rule.into())
+            .collect::<HashSet<_>>();
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&self.sparse_path)
+            .with_context(|| {
+                anyhow!("failed to create or open {:?}", self.sparse_path.display())
+            })?;
+        let reader = BufReader::new(&file);
+        let mut rules = reader.lines().into_iter().flatten().collect::<Vec<_>>();
+        let _ = rules.extract_if(.., |rule| old_rules.contains(rule));
+
+        file.write_all(
+            rules
+                .into_iter()
+                .fold(String::new(), |mut acc, u| {
+                    writeln!(&mut acc, "{u}").unwrap();
+                    acc
+                })
+                .as_bytes(),
+        )
+        .with_context(|| anyhow!("failed to remove rules in {:?}", self.sparse_path.display()))?;
 
         Ok(())
     }
