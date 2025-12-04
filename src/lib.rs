@@ -357,6 +357,7 @@ impl Cluster {
             sparse_checkout: SparseCheckout::new(path.as_ref())?,
         };
         cluster.extract_cluster_definition()?;
+        cluster.deploy_default_rules()?;
 
         Ok(cluster)
     }
@@ -477,6 +478,36 @@ impl Cluster {
         self.sparse_checkout.insert_rules(["/*"])?;
         let output = self.gitcall_non_interactive(["checkout"])?;
         info!("{output}");
+        Ok(())
+    }
+
+    /// Deploy default sparsity rules of cluster.
+    ///
+    /// Uses the sparsity rules defined in the cluster's definition file. Will
+    /// not override existing rules in sparse checkout configuration file.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if sparse checkout configuration file cannot be opened,
+    ///   read, and written to for whatever reason.
+    /// - Will fail if checkout files.
+    #[instrument(skip(self), level = "debug")]
+    pub fn deploy_default_rules(&self) -> Result<()> {
+        info!("deploy default sparsity rules of {:?}", self.repository.path().display());
+        if self.is_empty() {
+            warn!("cluster {:?} is empty", self.repository.path().display());
+            return Ok(());
+        }
+
+        if let Some(default) = &self.definition.settings.include {
+            self.sparse_checkout.insert_rules(default)?;
+        } else {
+            warn!("cluster has no default sparsity rules to use");
+        }
+
+        let output = self.gitcall_non_interactive(["checkout"])?;
+        info!("{output}");
+
         Ok(())
     }
 
