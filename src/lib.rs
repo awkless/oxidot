@@ -23,7 +23,7 @@ use std::{
     process::Command,
     time,
 };
-use tracing::{info, instrument, warn};
+use tracing::{info, instrument, trace, warn};
 
 /// Cluster store management.
 ///
@@ -78,10 +78,13 @@ impl Store {
         }
 
         // TODO: Add checks for valid cluster store structure at some point.
-        let store = Self {
+        let mut store = Self {
             store_path,
             clusters,
         };
+
+        store.expand_work_tree_aliases()?;
+
         Ok(store)
     }
 
@@ -272,6 +275,20 @@ impl Store {
         let auth_bar = ProgressBarAuthenticator::new(bar.clone());
         let cluster = Cluster::try_new_clone(&dep_info.url, path, auth_bar)?;
         self.clusters.insert(name.as_ref().into(), cluster);
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    fn expand_work_tree_aliases(&mut self) -> Result<()> {
+        trace!("Expand working directory aliases of nodes");
+        for cluster in self.clusters.values_mut() {
+            let expand = shellexpand::full(
+                cluster.definition.settings.work_tree_alias.as_path().to_string_lossy().as_ref(),
+            )?
+            .into_owned();
+            cluster.definition.settings.work_tree_alias = WorkTreeAlias::new(expand);
+        }
 
         Ok(())
     }
@@ -587,12 +604,11 @@ impl Cluster {
 
         if let Some(default) = &self.definition.settings.include {
             self.sparse_checkout.insert_rules(default)?;
+            let output = self.gitcall_non_interactive(["checkout"])?;
+            info!("{output}");
         } else {
             warn!("cluster has no default sparsity rules to use");
         }
-
-        let output = self.gitcall_non_interactive(["checkout"])?;
-        info!("{output}");
 
         Ok(())
     }
