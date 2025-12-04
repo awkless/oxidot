@@ -693,32 +693,37 @@ impl Cluster {
     /// Checks if cluster is deployed by seeing if any file content exists in
     /// its work tree alias.
     pub fn is_deployed(&self) -> bool {
-	if self.is_empty() {
-	    return false;
-	}
+        if self.is_empty() {
+            return false;
+        }
 
-	let rules = match self.sparse_checkout.current_rules() {
-	    Ok(r) => r,
-	    Err(_) => return false,
-	};
+        let rules = match self.sparse_checkout.current_rules() {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
 
-	if rules.is_empty() {
-	    return false;
-	}
+        if rules.is_empty() {
+            return false;
+        }
 
-	let entries = match self.list_file_paths() {
-	    Ok(p) => p,
-	    Err(_) => return false,
-	};
+        let entries = match self.list_file_paths() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
 
-	for entry in entries {
-	    let full_path = self.definition.settings.work_tree_alias.as_path().join(&entry);
-	    if full_path.exists() && self.does_path_match_sparse_rule(&rules, &full_path) {
-		return true;
-	    }
-	}
+        for entry in entries {
+            let full_path = self
+                .definition
+                .settings
+                .work_tree_alias
+                .as_path()
+                .join(&entry);
+            if full_path.exists() && self.does_path_match_sparse_rule(&rules, &full_path) {
+                return true;
+            }
+        }
 
-	false
+        false
     }
     /// Print out current sparsity rule set.
     ///
@@ -855,32 +860,32 @@ impl Cluster {
     }
 
     fn does_path_match_sparse_rule(&self, rules: &[String], path: &Path) -> bool {
-	let root = self.definition.settings.work_tree_alias.as_path();
-	let relative_path = match path.strip_prefix(root) {
-	    Ok(p) => p,
-	    Err(_) => return false,
-	};
+        let root = self.definition.settings.work_tree_alias.as_path();
+        let relative_path = match path.strip_prefix(root) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
 
-	let mut builder = GitignoreBuilder::new(root);
+        let mut builder = GitignoreBuilder::new(root);
         // INVARIANT: Ignore everything by default.
-	builder.add_line(None, "/*").unwrap();
+        builder.add_line(None, "/*").unwrap();
 
-	for rule in rules {
+        for rule in rules {
             // INVARIANT: Negate/invert sparsity rules.
             // - Sparse checkout rules use the same syntax as gitignore rules, but include
             //   matching paths instead of ignoring them. So, we need to negate/invert these rules,
             //   because the ignore crate API ties to ignore matching paths instead of including
             //   them!
-	    let whitelist_rule = if let Some(stripped) = rule.strip_prefix('!') {
-		stripped.to_string()
-	    } else {
-		format!("!{}", rule)
-	    };
-	    builder.add_line(None, &whitelist_rule).unwrap();
-	}
+            let whitelist_rule = if let Some(stripped) = rule.strip_prefix('!') {
+                stripped.to_string()
+            } else {
+                format!("!{}", rule)
+            };
+            builder.add_line(None, &whitelist_rule).unwrap();
+        }
 
-	let matcher = builder.build().unwrap();
-	!matcher.matched(relative_path, path.is_dir()).is_ignore()
+        let matcher = builder.build().unwrap();
+        !matcher.matched(relative_path, path.is_dir()).is_ignore()
     }
 }
 
