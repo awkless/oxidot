@@ -8,7 +8,7 @@ use git2::{
     build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, ObjectType, RemoteCallbacks,
     Repository,
 };
-use indicatif::{MultiProgress, ProgressBar};
+use indicatif::{MultiProgress, ProgressStyle, ProgressBar};
 use inquire::{Password, Text};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,6 +18,7 @@ use std::{
     fs::{remove_dir_all, read_to_string, write, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
+    time,
 };
 use tracing::{info, instrument, warn};
 
@@ -53,6 +54,15 @@ pub struct Store {
 }
 
 impl Store {
+    /// Construct new cluster store manager.
+    ///
+    /// Will treat target directory as a cluster store. All clusters within
+    /// that path will be opened for management and manipulation.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if any cluster cannot be opened at target path for whatever
+    /// reason.
     pub fn new(path: impl Into<PathBuf>) -> Result<Self> {
         let store_path = path.into();
         let pattern = store_path.join("*.git").to_string_lossy().into_owned();
@@ -72,10 +82,26 @@ impl Store {
         Ok(store)
     }
 
+    /// Insert a cluster into the store.
+    ///
+    /// Returns `None` if and only if the cluster was new to the store. If the
+    /// given cluster already exists in the store, then the old cluster will be
+    /// returned after the new cluster takes its place in the store. The name
+    /// of the cluster is never updated.
     pub fn insert(&mut self, name: impl Into<String>, cluster: Cluster) -> Option<Cluster> {
         self.clusters.insert(name.into(), cluster)
     }
 
+    /// Remove a cluster from the store.
+    ///
+    /// Will remove the entire cluster from the cluster store path, and removes
+    /// the cluster from the store manager itself. The newly removed cluster
+    /// entry is returned.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if cluster cannot be removed from the cluster store path.
+    /// - Will fail if cluster does not exist in the store.
     #[instrument(skip(self, name), level = "debug")]
     pub fn remove(&mut self, name: impl AsRef<str>) -> Result<Cluster> {
         info!("remove {:?} from cluster store", name.as_ref());
@@ -88,19 +114,40 @@ impl Store {
             .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
     }
 
+    /// Get cluster from the store.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if cluster does not exist in the store.
     pub fn get(&self, name: impl AsRef<str>) -> Result<&Cluster> {
         self.clusters
             .get(name.as_ref())
             .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
     }
 
+    /// Get mutable cluster from the store.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if cluster does not exist in the store.
     pub fn get_mut(&mut self, name: impl AsRef<str>) -> Result<&mut Cluster> {
         self.clusters
             .get_mut(name.as_ref())
             .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
     }
 
+    /// Make sure that a target cluster's dependencies exist in the store.
+    ///
+    /// Goes through the dependency listing (if any) of a cluster and goes
+    /// through the process of cloning any dependencies that are missing in
+    /// the cluster store. Skips over dependencies that already exist. Returns
+    /// the names of the clusters that were missing.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if any dependency cannot be properly cloned.
     pub fn resolve_dependencies(&mut self, cluster_name: impl AsRef<str>) -> Result<Vec<String>> {
+        let bars = MultiProgress::new();
         let mut resolved = Vec::new();
         let mut visited = HashSet::new();
         let mut stack = VecDeque::new();
@@ -112,7 +159,9 @@ impl Store {
             }
 
             if !self.clusters.contains_key(&current) {
-                self.clone_missing_cluster(&current)?;
+                let bar = bars.add(ProgressBar::no_length());
+                self.clone_missing_cluster(bar.clone(), &current)?;
+                bar.finish();
             }
 
             if let Some(cluster) = self.clusters.get(&current) {
@@ -130,7 +179,7 @@ impl Store {
         Ok(resolved)
     }
 
-    fn clone_missing_cluster(&mut self, name: impl AsRef<str>) -> Result<()> {
+    fn clone_missing_cluster(&mut self, bar: ProgressBar, name: impl AsRef<str>) -> Result<()> {
         let dep_info = self
             .clusters
             .values()
@@ -139,12 +188,8 @@ impl Store {
             .ok_or_else(|| anyhow!("dependency {:?} no declared", name.as_ref()))?;
 
         let path = self.store_path.join(format!("{}.git", name.as_ref()));
-        let bars = MultiProgress::new();
-        let bar = bars.add(ProgressBar::no_length());
         let auth_bar = ProgressBarAuthenticator::new(bar.clone());
-
         let cluster = Cluster::try_new_clone(&dep_info.url, path, auth_bar)?;
-        bar.finish_and_clear();
         self.clusters.insert(name.as_ref().into(), cluster);
 
         Ok(())
@@ -180,12 +225,28 @@ pub struct Cluster {
 }
 
 impl Cluster {
+    /// Initialize a new cluster.
+    ///
+    /// Will initialize a new cluster at target path based an initial cluster
+    /// definition. Once properly initialized, the initial cluster definition
+    /// will be serialized into the work tree alias, staged into the index,
+    /// and committed.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if cluster cannot be initialized as a bare-alias repository.
+    /// - Will fail if cluster definition cannot be serialized.
+    /// - Will fail if newly serialized cluster definition cannot be staged
+    ///   and committed.
     #[instrument(skip(path, definition), level = "debug")]
     pub fn try_new_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Self> {
         info!("initialize new cluster: {:?}", path.as_ref().display());
         let repository = Repository::init_bare(path.as_ref())?;
+
         let mut config = repository.config()?;
+        // INVARIANT: Do not show untracked files.
         config.set_str("status.showUntrackedFiles", "no")?;
+        // INVARIANT: Always enable sparse checkout.
         config.set_str("core.sparseCheckout", "true")?;
         let sparse_checkout = SparseCheckout::new(path.as_ref())?;
 
@@ -205,6 +266,16 @@ impl Cluster {
         Ok(cluster)
     }
 
+    /// Open existing cluster.
+    ///
+    /// Opens existing cluster at specified path and loads cluster definition
+    /// at the top-level.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if cluster cannot be opened.
+    /// - Will fail if cluster definition cannot be extracted at the top-level.
+    /// - Will fail if missing configuration settings cannot be set.
     #[instrument(skip(path), level = "debug")]
     pub fn try_new_open(path: impl AsRef<Path>) -> Result<Self> {
         info!("open cluster: {:?}", path.as_ref().display());
@@ -216,11 +287,13 @@ impl Cluster {
         };
         cluster.extract_cluster_definition()?;
 
+        // INVARIANT: Do not show untracked files.
         let mut config = cluster.repository.config()?;
         if cluster.get_config_value(&config, "status.showUntrackedFiles")? != Some("no".into()) {
             config.set_str("status.showUntrackedFiles", "no")?;
         }
 
+        // INVARIANT: Always enable sparse checkout.
         if cluster.get_config_value(&config, "core.sparseCheckout")? != Some("true".into()) {
             config.set_str("core.sparseCheckout", "true")?;
         }
@@ -228,6 +301,18 @@ impl Cluster {
         Ok(cluster)
     }
 
+    /// Clone cluster from remote to target path.
+    ///
+    /// Clones cluster through valid Git URL to a target path. Will use
+    /// authentication by prompting for user credentials if needed. Once the
+    /// cluster has been cloned, its cluster definition will be extracted at
+    /// the top-level. A simple progress bar will be displayed showing how
+    /// much of the cluster has been cloned.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if cluster cannot be cloned for whatever reason.
+    /// - Will fail if cluster definition cannot be extracted from top-level.
     pub fn try_new_clone(
         url: impl AsRef<str>,
         path: impl AsRef<Path>,
@@ -235,14 +320,26 @@ impl Cluster {
     ) -> Result<Self> {
         let authenticator = GitAuthenticator::default().set_prompter(prompter.clone());
         let config = Config::open_default()?;
+        let style = ProgressStyle::with_template(
+            "{elapsed_precise:.green}  {msg:<50}  [{wide_bar:.yellow/blue}]",
+        )?
+        .progress_chars("-Cco.");
+        prompter.bar.set_style(style);
+        prompter.bar.set_message(format!("{}", url.as_ref()));
+        prompter.bar.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let mut throttle = time::Instant::now();
         let mut rc = RemoteCallbacks::new();
         rc.credentials(authenticator.credentials(&config));
         rc.transfer_progress(|progress| {
             let stats = progress.to_owned();
             let bar_size = stats.total_objects() as u64;
             let bar_pos = stats.received_objects() as u64;
-            prompter.bar.set_length(bar_size);
-            prompter.bar.set_position(bar_pos);
+            if throttle.elapsed() > time::Duration::from_millis(10) {
+                throttle = time::Instant::now();
+                prompter.bar.set_length(bar_size);
+                prompter.bar.set_position(bar_pos);
+            }
             true
         });
 
@@ -264,6 +361,17 @@ impl Cluster {
         Ok(cluster)
     }
 
+    /// Stage and commit content directly into the cluster.
+    ///
+    /// Takes a path and string content to be directly staged and committed
+    /// into the cluster with a helpful message. Always appends the new commit
+    /// after the latest parent commit.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail latest parent commit cannot be determined.
+    /// - Will fail if input content cannot be staged into the index.
+    /// - Will fail if staged content cannot be committed.
     pub fn stage_and_commit(
         &self,
         filename: impl AsRef<Path>,
@@ -323,6 +431,18 @@ impl Cluster {
         Ok(())
     }
 
+    /// Deploy file content from cluster based on a set of sparsity rules.
+    ///
+    /// Each rule is written into the sparse checkout configuration file
+    /// inside cluster. Once written, a checkout is performed to apply the
+    /// new rules. Any file that matches the newly applied rules will be
+    /// deployed directly to the work tree alias.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if sparsity rules cannot be inserted into sparse checkout
+    ///   configuration file.
+    /// - Will fail if checkout cannot be performed to apply the new rules.
     #[instrument(skip(self, rules), level = "debug")]
     pub fn deploy_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
         info!("deploy {:?}", self.repository.path().display());
@@ -338,6 +458,20 @@ impl Cluster {
         Ok(())
     }
 
+    /// Undeploy file content from cluster based on a set of sparsity rules.
+    ///
+    /// Each rule will be matched by the rules inside the sparse checkout
+    /// configuration file. Any rules that match will be removed. Once the
+    /// sparse checkout configuration file is done being updated, a checkout
+    /// will be performed to apply the changes to work tree alias. The rules
+    /// that were removed will cause target files to be also removed from
+    /// the work tree alias.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if matching rules cannot be removed from sparse checkout
+    ///   configuration file.
+    /// - Will fail if checkout cannot be performed to apply new changes.
     #[instrument(skip(self, rules), level = "debug")]
     pub fn undeploy_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
         info!("undeploy {:?}", self.repository.path().display());
@@ -352,6 +486,22 @@ impl Cluster {
         Ok(())
     }
 
+    /// Undeploy the entire work tree alias.
+    ///
+    /// Similar to undeploy_rules, but removes _all_ existing sparsity
+    /// rules from sparse checkout configuration file. Once all rules have
+    /// been removed, a checkout is performed to apply the changes made. Since
+    /// there are no sparsity rules, any and all deployed file content will be
+    /// undeployed from the work tree alias.
+    ///
+    /// A warning will be issued if the cluster is already undeployed, i.e.,
+    /// there is nothing in its work tree alias.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if sparsity rule set cannot be cleared from sparse checkout
+    ///   configuration file.
+    /// - Will fail if checkout cannot be performed to apply new changes.
     #[instrument(skip(self), level = "debug")]
     pub fn undeploy_all(&self) -> Result<()> {
         if !self.is_deployed()? {
@@ -369,6 +519,10 @@ impl Cluster {
         Ok(())
     }
 
+    /// Check if cluster is deployed.
+    ///
+    /// Checks if cluster is deployed by seeing if any file content exists in
+    /// its work tree alias.
     pub fn is_deployed(&self) -> Result<bool> {
         if self.is_empty() {
             return Ok(false);
@@ -390,6 +544,12 @@ impl Cluster {
         Ok(true)
     }
 
+    /// Print out current sparsity rule set.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if sparse checkout configuration file cannot be opened and
+    ///   read.
     #[instrument(skip(self), level = "debug")]
     pub fn show_deploy_rules(&self) -> Result<()> {
         let rules = self.sparse_checkout.current_rules()?;
@@ -398,6 +558,9 @@ impl Cluster {
         Ok(())
     }
 
+    /// Check if cluster is empty.
+    ///
+    /// A cluster is considered empty if it has not commit history.
     pub fn is_empty(&self) -> bool {
         self.repository
             .head()
@@ -407,10 +570,22 @@ impl Cluster {
             .is_none()
     }
 
+    /// Path to cluster.
+    ///
+    /// Returns path to gitdir of cluster.
     pub fn path(&self) -> &Path {
         self.repository.path()
     }
 
+    /// Issue Git command via non interactive system call.
+    ///
+    /// Takes a a set of arguments and passes them on to Git itself in a
+    /// non interactive (non-blocking) fashion. Returns any output from
+    /// standard out or standard error.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if system call to Git fails, or Git itself fails.
     pub fn gitcall_non_interactive(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -418,6 +593,16 @@ impl Cluster {
         syscall_non_interactive("git", self.expand_bin_args(args))
     }
 
+    /// Issue Git command via interactive system call.
+    ///
+    /// Takes a set of arguments and passes them on to Git itself in an
+    /// interactive (blocking) fashion. Calls to this method will allow
+    /// Git to control the currently active process that caller is using.
+    /// Control will not be given back until Git is done executing.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if system call to Git fails, or Git itself fails.
     pub fn gitcall_interactive(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -494,50 +679,166 @@ impl Cluster {
     }
 }
 
+/// Cluster definition layout.
+///
+/// All clusters in oxidot come with a __definition__ file. This file is a
+/// simple configuration file that details how the cluster should be
+/// configured and managed by not only the cluster itself, but by the cluster
+/// store manager as well.
+///
+/// # General Layout
+///
+/// A cluster definition is composed of two basic parts: settings and
+/// dependencies. The settings section simply defines how the cluster should
+/// be configured. The dependencies section lists all dependencies that should
+/// be deployed along with the cluster itself. In other words, clusters can
+/// list other clusters as dependencies.
+///
+/// # Location
+///
+/// Cluster definitions must always exist at the top-level of a cluster in a
+/// special file named "cluster.toml". If this file cannot be found, then the
+/// cluster is invalid.
+///
+/// # See Also
+///
+/// - [`Cluster`](struct.Cluster)
+/// - [`Store`](struct.Store)
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct ClusterDefinition {
     pub settings: ClusterSettings,
     pub dependencies: Option<Vec<ClusterDependency>>,
 }
 
+/// Cluster configuration settings.
+///
+/// Standard settings to use for any given cluster.
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct ClusterSettings {
+    /// Brief description of what the cluster contains.
     pub description: String,
+
+    /// Remove URL to clone cluster from.
     pub url: String,
+
+    /// Work tree alias to use for deployment.
     pub work_tree_alias: WorkTreeAlias,
+
+    /// Default listing of file content to deploy to work tree alias.
     pub include: Option<Vec<String>>,
 }
 
+/// Cluster dependency listing.
+///
+/// List of other clusters to use as dependencies for given cluster.
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct ClusterDependency {
+    /// Name of the cluster dependency.
     pub name: String,
+
+    /// Remote URL to clone cluster from if it isn't in the cluster store.
     pub url: String,
+
+    /// Additional listing of file content to deploy.
     pub include: Option<Vec<String>>,
 }
 
+/// Work tree alias path for cluster.
+///
+/// # See also
+///
+/// - [`Cluster`](struct.Cluster)
 #[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct WorkTreeAlias(pub PathBuf);
 
 impl WorkTreeAlias {
+    /// Construct new work tree alias path.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self(path.into())
     }
 
+    /// Construct work tree alias path pointing to user's home directory.
+    ///
+    /// The user's home directory is the default path of a work tree alias
+    /// if no other path is specified.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if user's home directory cannot be determined for whatever
+    /// reason.
     pub fn try_default() -> Result<Self> {
         Ok(Self(home_dir()?))
     }
 
+    /// Helper to convert work tree alias path to [`OsString`].
     pub fn to_os_string(&self) -> OsString {
         OsString::from(self.0.to_string_lossy().into_owned())
     }
 }
 
+/// Sparse checkout configuration file manager.
+///
+/// Manage the sparsity rules contained inside of a cluster's sparse checkout
+/// configuration file.
+///
+/// # Why Sparse Checkout?
+///
+/// Git comes with a cool feature called "sparse checkout". It allows the user
+/// to reduce their work tree to a subset of tracked files. What gets included
+/// in this reduced work tree is determined by a set of __sparsity rules__.
+/// A sparsity rule is just a pattern of characters that match tracked files
+/// for inclusion into the reduced work tree. The formatting of these rules
+/// use the same format as gitignore rules, but instead of trying to _ignore_
+/// files, they are trying to _include_ them.
+///
+/// Sparse checkout operates in one of two modes: cone or non-cone mode. These
+/// operation modes simply reduce the allowable set of sparsity rule patterns
+/// that can be used. Cone mode only allows for usage of sparsity rule patterns
+/// that include directories. Non-cone mode allows usage of the _entire_
+/// sparsity rule pattern set. By default Git uses cone mode.
+///
+/// Oxidot employs sparse checkout as the backbone of the file deployment
+/// feature provided by clusters. When using sparse checkout with bare-alias
+/// repositories, file content can be directly deployed to a work tree alias
+/// without needing to manually symlink, copy, or move it. This also has the
+/// added benefit of allowing Git itself to keep track of these deployed files
+/// without needing to modify the commit history of any given cluster in the
+/// cluster store.
+///
+/// # Pitfalls
+///
+/// By default oxidot uses cone mode for sparse checkout. We prefer to give
+/// the user full access to the sparsity rule pattern set to make it easier
+/// to deploy any component of a cluster. However, cone mode is deprecated for
+/// new releases of Git. Cone mode will not be removed from Git, but the
+/// implementors of sparse checkout highly recommend to use non-cone mode
+/// instead.
+///
+/// The main problem with cone mode is its runtime of O(N*M) where N is number
+/// of sparsity rules to check, and M is the number of paths to check against.
+/// Oxidot generally expects to avoid this issue through the modular setup
+/// of clusters, where the runtime is split across multiple bare-alias
+/// repositories.
+///
+/// # See Also
+///
+/// - [Man page sparse checkout](https://git-scm.com/docs/git-sparse-checkout)
+/// - [`Cluster`](struct.Cluster)
 #[derive(Debug)]
 pub struct SparseCheckout {
     sparse_path: PathBuf,
 }
 
 impl SparseCheckout {
+    /// Construct new sparse checkout configuration file manager.
+    ///
+    /// Determines path to sparse checkout configuration file relative to
+    /// path to gitdir. Creates the sparse checkout configuration file if it
+    /// does not already exist.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if sparse checkout configuration file cannot be created.
     pub fn new(gitdir: impl Into<PathBuf>) -> Result<Self> {
         let sparse_path = gitdir.into().join("info").join("sparse-checkout");
 
@@ -552,15 +853,30 @@ impl SparseCheckout {
         Ok(Self { sparse_path })
     }
 
+    /// Insert a list of sparsity rules to configuration file.
+    ///
+    /// Takes list of new sparsity rules and writes them directly into the
+    /// sparse checkout configuration file. Any existing sparsity rules within
+    /// the configuration file will be preserved, i.e., the new rules will be
+    /// appended to the older rules. If there are duplicate sparsity rules, they
+    /// will be deduplicated ensuring that each rule in the configuration is
+    /// unique.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if sparse checkout configuration file cannot be opened, read,
+    /// or written to for whatever reason.
     pub fn insert_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        let new_rules: Vec<String> = rules.into_iter().map(|r| r.into()).collect();
         let mut rule_set = read_to_string(&self.sparse_path)
             .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
 
+        // INVARIANT: Append new rules to existing rule set.
+        let new_rules: Vec<String> = rules.into_iter().map(|r| r.into()).collect();
         for rule in new_rules {
             writeln!(&mut rule_set, "{}", rule).unwrap();
         }
 
+        // INVARIANT: Deduplicate rule set and make sure each rule is on its own line.
         let mut seen = HashSet::new();
         let rule_set = rule_set
             .lines()
@@ -568,6 +884,7 @@ impl SparseCheckout {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // INVARIANT: Append trailing newline to end of rule set.
         let rule_set = if rule_set.is_empty() {
             rule_set
         } else {
@@ -584,16 +901,27 @@ impl SparseCheckout {
         Ok(())
     }
 
+    /// Remove matching rules from sparse checkout configuration file.
+    ///
+    /// Takes list of rules and removes them from the sparse checkout
+    /// configuration file if they exist. Any existing rules that do not match
+    /// the list will be preserved.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if sparse checkout configuration file cannot be opened, read,
+    /// or written to for whatever reason.
     pub fn remove_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        let old_rules: HashSet<String> = rules.into_iter().map(|rule| rule.into()).collect();
         let content = read_to_string(&self.sparse_path)
             .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
 
+        let old_rules: HashSet<String> = rules.into_iter().map(|rule| rule.into()).collect();
         let filtered: Vec<&str> = content
             .lines()
             .filter(|line| !old_rules.contains(*line))
             .collect();
 
+        // INVARIANT: Append trailing newline to end of rule set.
         let result = if filtered.is_empty() {
             String::new()
         } else {
@@ -607,6 +935,12 @@ impl SparseCheckout {
         Ok(())
     }
 
+    /// Get listing of all current sparsity rules.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if sparse checkout configuration file cannot be opened or
+    /// read.
     pub fn current_rules(&self) -> Result<Vec<String>> {
         let content = read_to_string(&self.sparse_path)
             .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
@@ -614,6 +948,12 @@ impl SparseCheckout {
         Ok(content.lines().map(String::from).collect())
     }
 
+    /// Clear all rules from sparse checkout configuration file.
+    ///
+    /// # Errors
+    ///
+    /// Will fail if sparse checkout configuration file cannot be opened, read,
+    /// or written to for whatever reason.
     pub fn clear_rules(&self) -> Result<()> {
         write(&self.sparse_path, b"").with_context(|| {
             anyhow!("failed to clear rules in {:?}", self.sparse_path.display())
@@ -689,10 +1029,27 @@ impl Prompter for ProgressBarAuthenticator {
     }
 }
 
+/// Determine path to user's home directory.
+///
+/// User's home directory acts as the default path for work tree aliases if
+/// no other path is specified.
+///
+/// # Errors
+///
+/// Will fail if user's home directory cannot be determined for whatever
+/// reason.
 pub fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().ok_or(anyhow!("cannot determine path to home directory"))
 }
 
+/// Determine path to cluster store directory.
+///
+/// The cluster store path is set to `$XDG_DATA_HOME/oxidot-store` by default.
+///
+/// # Errors
+///
+/// Will fail if user's home directory cannot be determined for whatever
+/// reason.
 pub fn cluster_store_dir() -> Result<PathBuf> {
     dirs::data_dir()
         .map(|path| path.join("oxidot-store"))
