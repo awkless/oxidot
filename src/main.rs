@@ -123,8 +123,14 @@ struct UndeployOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct ListOptions {
-    #[arg(short, long, value_name = "cluster_name")]
-    pub deploy_rules: Option<String>,
+    #[arg(group = "target", short, long, value_name = "cluster_name")]
+    pub sparsity_rules: Option<String>,
+
+    #[arg(group = "target", short, long)]
+    pub deployed: bool,
+
+    #[arg(group = "target", short, long)]
+    pub undeployed: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -238,10 +244,18 @@ fn run_undeploy(opts: UndeployOptions) -> Result<()> {
 
 fn run_list(opts: ListOptions) -> Result<()> {
     let store = Store::new(cluster_store_dir()?)?;
-    if let Some(cluster_name) = opts.deploy_rules {
+
+    if let Some(cluster_name) = opts.sparsity_rules {
         let cluster = store.get(cluster_name)?;
         cluster.show_deploy_rules()?;
+    } else if opts.deployed {
+        store.list_deployed();
+    } else if opts.undeployed {
+        store.list_undeployed();
+    } else {
+        store.list_fully();
     }
+
     Ok(())
 }
 
