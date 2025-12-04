@@ -13,7 +13,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Password, Text};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::hash_map::Iter,
+    collections::hash_map::{Values, Iter},
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     fmt,
@@ -218,6 +218,11 @@ impl Store {
     /// Iterate through cluster store entries.
     pub fn iter(&self) -> Iter<'_, String, Cluster> {
         self.clusters.iter()
+    }
+
+    /// Iterate through cluster entires without the name.
+    pub fn values(&self) -> Values<'_, String, Cluster> {
+        self.clusters.values()
     }
 
     /// Make sure that a target cluster's dependencies exist in the store.
@@ -457,7 +462,6 @@ impl Cluster {
             sparse_checkout: SparseCheckout::new(path.as_ref())?,
         };
         cluster.extract_cluster_definition()?;
-        cluster.deploy_default_rules()?;
 
         Ok(cluster)
     }

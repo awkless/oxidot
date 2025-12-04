@@ -225,6 +225,9 @@ fn run_clone(opts: CloneOptions) -> Result<()> {
     let cluster = Cluster::try_new_clone(&opts.url, path, auth_bar)?;
     store.insert(&opts.cluster_name, cluster);
     store.resolve_dependencies(&opts.cluster_name)?;
+    for entry in store.values() {
+        entry.deploy_default_rules()?;
+    }
 
     Ok(())
 }
