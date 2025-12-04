@@ -458,6 +458,29 @@ impl Cluster {
         Ok(())
     }
 
+    /// Deploy all tracked files to work tree alias.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if sparse checkout configuration file cannot be opened,
+    ///   read, and written to for whatever reason.
+    /// - Will fail if checkout files.
+    #[instrument(skip(self), level = "debug")]
+    pub fn deploy_all(&self) -> Result<()> {
+        info!("deploy all of {:?}", self.repository.path().display());
+        if self.is_empty() {
+            warn!("cluster {:?} is empty", self.repository.path().display());
+            return Ok(());
+        }
+
+        self.sparse_checkout.clear_rules()?;
+        self.sparse_checkout.insert_rules(["/*"])?;
+        let output = self.gitcall_non_interactive(["checkout"])?;
+        info!("{output}");
+        Ok(())
+    }
+
+
     /// Undeploy file content from cluster based on a set of sparsity rules.
     ///
     /// Each rule will be matched by the rules inside the sparse checkout
