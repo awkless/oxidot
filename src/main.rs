@@ -91,11 +91,17 @@ struct CloneOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct DeployOptions {
-    #[arg(required = true, value_name = "name")]
+    #[arg(required = true, value_name = "cluster_name")]
     pub cluster_name: String,
 
-    #[arg(required = true, value_name = "name")]
+    #[arg(group = "rules", value_name = "sparsity_rule")]
     pub sparsity_rules: Vec<String>,
+
+    #[arg(short, long, group = "rules")]
+    pub all: bool,
+
+    #[arg(short, long, group = "rules")]
+    pub default: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -185,7 +191,18 @@ fn run_clone(opts: CloneOptions) -> Result<()> {
 fn run_deploy(opts: DeployOptions) -> Result<()> {
     let store = Store::new(cluster_store_dir()?)?;
     let cluster = store.get(&opts.cluster_name)?;
-    cluster.deploy_rules(opts.sparsity_rules)?;
+
+    if !opts.sparsity_rules.is_empty() {
+        cluster.deploy_rules(opts.sparsity_rules)?;
+    }
+
+    if opts.all {
+        cluster.deploy_all()?;
+    }
+
+    if opts.default {
+        cluster.deploy_default_rules()?;
+    }
 
     Ok(())
 }
