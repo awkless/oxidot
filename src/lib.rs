@@ -8,17 +8,19 @@ use git2::{
     build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, ObjectType, RemoteCallbacks,
     Repository,
 };
+use ignore::gitignore::GitignoreBuilder;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Password, Text};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::hash_map::Iter,
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
+    fmt,
     fmt::Write,
     fs::{read_to_string, remove_dir_all, write, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
-    collections::hash_map::Iter,
     time,
 };
 use tracing::{info, instrument, warn};
@@ -135,6 +137,34 @@ impl Store {
         self.clusters
             .get_mut(name.as_ref())
             .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
+    }
+
+    /// List all available clusters with full details.
+    #[instrument(skip(self), level = "debug")]
+    pub fn list_fully(&self) -> Result<()> {
+        if self.clusters.is_empty() {
+            warn!("cluster store is empty");
+            return Ok(());
+        }
+
+        let mut listing = String::new();
+        for (name, entry) in self.clusters.iter() {
+            let status = if entry.is_deployed() {
+                "[  deployed]"
+            } else {
+                "[undeployed]"
+            };
+
+            let data = format!(
+                "{} {} -> {}\n",
+                status, name, entry.definition.settings.work_tree_alias
+            );
+            listing.push_str(data.as_str());
+        }
+
+        info!("all available clusters:\n{}", listing);
+
+        Ok(())
     }
 
     /// Iterate through cluster store entries.
@@ -568,7 +598,7 @@ impl Cluster {
     /// - Will fail if checkout cannot be performed to apply new changes.
     #[instrument(skip(self), level = "debug")]
     pub fn undeploy_all(&self) -> Result<()> {
-        if !self.is_deployed()? {
+        if !self.is_deployed() {
             warn!(
                 "cluster {:?} already undeployed in full",
                 self.repository.path().display()
@@ -620,27 +650,34 @@ impl Cluster {
     ///
     /// Checks if cluster is deployed by seeing if any file content exists in
     /// its work tree alias.
-    pub fn is_deployed(&self) -> Result<bool> {
-        if self.is_empty() {
-            return Ok(false);
-        }
+    pub fn is_deployed(&self) -> bool {
+	if self.is_empty() {
+	    return false;
+	}
 
-        let entries: Vec<String> = self
-            .list_file_paths()?
-            .into_iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect();
+	let rules = match self.sparse_checkout.current_rules() {
+	    Ok(r) => r,
+	    Err(_) => return false,
+	};
 
-        for entry in entries {
-            let path = self.definition.settings.work_tree_alias.0.join(entry);
-            if !path.exists() {
-                return Ok(false);
-            }
-        }
+	if rules.is_empty() {
+	    return false;
+	}
 
-        Ok(true)
+	let entries = match self.list_file_paths() {
+	    Ok(p) => p,
+	    Err(_) => return false,
+	};
+
+	for entry in entries {
+	    let full_path = self.definition.settings.work_tree_alias.as_path().join(&entry);
+	    if full_path.exists() && self.does_path_match_sparse_rule(&rules, &full_path) {
+		return true;
+	    }
+	}
+
+	false
     }
-
     /// Print out current sparsity rule set.
     ///
     /// # Errors
@@ -774,6 +811,35 @@ impl Cluster {
 
         Ok(entries)
     }
+
+    fn does_path_match_sparse_rule(&self, rules: &[String], path: &Path) -> bool {
+	let root = self.definition.settings.work_tree_alias.as_path();
+	let relative_path = match path.strip_prefix(root) {
+	    Ok(p) => p,
+	    Err(_) => return false,
+	};
+
+	let mut builder = GitignoreBuilder::new(root);
+        // INVARIANT: Ignore everything by default.
+	builder.add_line(None, "/*").unwrap();
+
+	for rule in rules {
+            // INVARIANT: Negate/invert sparsity rules.
+            // - Sparse checkout rules use the same syntax as gitignore rules, but include
+            //   matching paths instead of ignoring them. So, we need to negate/invert these rules,
+            //   because the ignore crate API ties to ignore matching paths instead of including
+            //   them!
+	    let whitelist_rule = if let Some(stripped) = rule.strip_prefix('!') {
+		stripped.to_string()
+	    } else {
+		format!("!{}", rule)
+	    };
+	    builder.add_line(None, &whitelist_rule).unwrap();
+	}
+
+	let matcher = builder.build().unwrap();
+	!matcher.matched(relative_path, path.is_dir()).is_ignore()
+    }
 }
 
 /// Cluster definition layout.
@@ -870,6 +936,17 @@ impl WorkTreeAlias {
     /// Helper to convert work tree alias path to [`OsString`].
     pub fn to_os_string(&self) -> OsString {
         OsString::from(self.0.to_string_lossy().into_owned())
+    }
+
+    /// Treat as path slice.
+    pub fn as_path(&self) -> &Path {
+        self.0.as_path()
+    }
+}
+
+impl fmt::Display for WorkTreeAlias {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_str(self.0.display().to_string().as_str())
     }
 }
 
