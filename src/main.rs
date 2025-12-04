@@ -148,6 +148,9 @@ struct ListOptions {
     #[arg(group = "target", short, long, value_name = "cluster_name")]
     pub sparsity_rules: Option<String>,
 
+    #[arg(group = "target", short, long, value_name = "cluster_name")]
+    pub files: Option<String>,
+
     /// List only deployed clusters.
     #[arg(group = "target", short, long)]
     pub deployed: bool,
@@ -276,6 +279,9 @@ fn run_list(opts: ListOptions) -> Result<()> {
     if let Some(cluster_name) = opts.sparsity_rules {
         let cluster = store.get(cluster_name)?;
         cluster.show_deploy_rules()?;
+    } else if let Some(cluster_name) = opts.files {
+        let cluster = store.get(cluster_name)?;
+        cluster.show_tracked_files()?;
     } else if opts.deployed {
         store.list_deployed();
     } else if opts.undeployed {

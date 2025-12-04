@@ -752,6 +752,7 @@ impl Cluster {
 
         false
     }
+
     /// Print out current sparsity rule set.
     ///
     /// # Errors
@@ -762,6 +763,14 @@ impl Cluster {
     pub fn show_deploy_rules(&self) -> Result<()> {
         let rules = self.sparse_checkout.current_rules()?;
         info!("current sparisty rules {rules:#?}");
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    pub fn show_tracked_files(&self) -> Result<()> {
+        let files = self.list_file_paths()?;
+        info!("currently tracked files {files:#?}");
 
         Ok(())
     }
@@ -957,7 +966,7 @@ impl Cluster {
         }
 
         let matcher = builder.build().unwrap();
-        !matcher.matched(relative_path, path.is_dir()).is_ignore()
+        !matcher.matched_path_or_any_parents(relative_path, path.is_dir()).is_ignore()
     }
 
     #[instrument(skip(self), level = "debug")]
