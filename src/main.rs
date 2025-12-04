@@ -82,7 +82,7 @@ struct InitOptions {
 #[command(author, about, long_about)]
 struct CloneOptions {
     #[arg(required = true, value_name = "name")]
-    pub name: String,
+    pub cluster_name: String,
 
     #[arg(required = true, value_name = "url")]
     pub url: String,
@@ -186,14 +186,14 @@ fn run_init(opts: InitOptions) -> Result<()> {
 fn run_clone(opts: CloneOptions) -> Result<()> {
     let mut store = Store::new(cluster_store_dir()?)?;
 
-    let path = cluster_store_dir()?.join(format!("{}.git", &opts.name));
+    let path = cluster_store_dir()?.join(format!("{}.git", &opts.cluster_name));
     let bars = MultiProgress::new();
     let bar = bars.add(ProgressBar::no_length());
     let auth_bar = ProgressBarAuthenticator::new(bar);
 
     let cluster = Cluster::try_new_clone(&opts.url, path, auth_bar)?;
-    store.insert(&opts.name, cluster);
-    store.resolve_dependencies(&opts.name)?;
+    store.insert(&opts.cluster_name, cluster);
+    store.resolve_dependencies(&opts.cluster_name)?;
 
     Ok(())
 }
