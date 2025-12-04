@@ -141,10 +141,10 @@ impl Store {
 
     /// List all available clusters with full details.
     #[instrument(skip(self), level = "debug")]
-    pub fn list_fully(&self) -> Result<()> {
+    pub fn list_fully(&self) {
         if self.clusters.is_empty() {
             warn!("cluster store is empty");
-            return Ok(());
+            return;
         }
 
         let mut listing = String::new();
@@ -163,8 +163,28 @@ impl Store {
         }
 
         info!("all available clusters:\n{}", listing);
+    }
 
-        Ok(())
+    /// List currently deployed clusters.
+    #[instrument(skip(self), level = "debug")]
+    pub fn list_deployed(&self) {
+        if self.clusters.is_empty() {
+            warn!("cluster store is empty");
+            return Ok(());
+        }
+
+        let mut listing = String::new();
+        for (name, entry) in self.clusters.iter() {
+            if entry.is_deployed() {
+                let data = format!(
+                    "{} -> {}\n",
+                    name, entry.definition.settings.work_tree_alias
+                );
+                listing.push_str(data.as_str());
+            }
+        }
+
+        info!("all deployed clusters:\n{}", listing);
     }
 
     /// Iterate through cluster store entries.
