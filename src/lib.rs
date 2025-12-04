@@ -336,6 +336,8 @@ impl Cluster {
         config.set_str("status.showUntrackedFiles", "no")?;
         // INVARIANT: Always enable sparse checkout.
         config.set_str("core.sparseCheckout", "true")?;
+        // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
+        config.set_str("advice.updateSparsePath", "false")?;
         let sparse_checkout = SparseCheckout::new(path.as_ref())?;
 
         let mut cluster = Self {
@@ -387,6 +389,11 @@ impl Cluster {
         // INVARIANT: Always enable sparse checkout.
         if cluster.get_config_value(&config, "core.sparseCheckout")? != Some("true".into()) {
             config.set_str("core.sparseCheckout", "true")?;
+        }
+
+        // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
+        if cluster.get_config_value(&config, "advice.updateSparsePath")? != Some("true".into()) {
+            config.set_str("advice.updateSparsePath", "false")?;
         }
 
         Ok(cluster)
@@ -443,6 +450,14 @@ impl Cluster {
             .bare(true)
             .fetch_options(fo)
             .clone(url.as_ref(), path.as_ref())?;
+
+        let mut config = repository.config()?;
+        // INVARIANT: Do not show untracked files.
+        config.set_str("status.showUntrackedFiles", "no")?;
+        // INVARIANT: Always enable sparse checkout.
+        config.set_str("core.sparseCheckout", "true")?;
+        // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
+        config.set_str("advice.updateSparsePath", "false")?;
 
         let mut cluster = Self {
             repository,
