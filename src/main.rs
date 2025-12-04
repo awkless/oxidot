@@ -40,24 +40,31 @@ impl Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
+    /// Initialize new cluster.
     #[command(override_usage = "oxidot init [options] <cluster_name>")]
     Init(InitOptions),
 
+    /// Clone existing cluster from remote.
     #[command(override_usage = "oxidot clone [options] <url>")]
     Clone(CloneOptions),
 
+    /// Deploy tracked files in target file to work tree alias by sparisty rule.
     #[command(override_usage = "oxidot deploy [options] <cluster_name> [<sparsity_rules>]...")]
     Deploy(DeployOptions),
 
+    /// Undeploy tracked files in target file from work tree alias by sparisty rule.
     #[command(override_usage = "oxidot undeploy [options] <cluster_name> [<sparsity_rules>]...")]
     Undeploy(UndeployOptions),
 
+    /// List status information about cluster store.
     #[command(override_usage = "oxidot list [options]")]
     List(ListOptions),
 
+    /// Remove cluster from cluster store.
     #[command(override_usage = "oxidot remove [options] <cluster_name>")]
     Remove(RemoveOptions),
 
+    /// Run Git binary directly on target cluster.
     #[command(external_subcommand)]
     Git(Vec<OsString>),
 }
@@ -65,15 +72,19 @@ enum Command {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct InitOptions {
+    /// Name of cluster to register into cluster store.
     #[arg(value_name = "cluster_name")]
-    pub name: String,
+    pub cluster_name: String,
 
+    /// Brief description of cluster entry.
     #[arg(short, long, value_name = "summary")]
     pub description: Option<String>,
 
+    /// URL of remote to clone cluster from.
     #[arg(short, long, value_name = "url")]
     pub url: Option<String>,
 
+    /// Path to work tree alias.
     #[arg(short, long, value_name = "path")]
     pub work_tree_alias: Option<PathBuf>,
 }
@@ -81,9 +92,11 @@ struct InitOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct CloneOptions {
+    /// Name of cluster to register into cluster store.
     #[arg(required = true, value_name = "name")]
     pub cluster_name: String,
 
+    /// URL of remote to clone from.
     #[arg(required = true, value_name = "url")]
     pub url: String,
 }
@@ -91,15 +104,19 @@ struct CloneOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct DeployOptions {
+    /// Name of cluster to deploy tracked files from.
     #[arg(required = true, value_name = "cluster_name")]
     pub cluster_name: String,
 
+    /// List of sparsity rules to match tracked files to deploy.
     #[arg(group = "rules", value_name = "sparsity_rule")]
     pub sparsity_rules: Vec<String>,
 
+    /// Deploy all tracked files to work tree alias.
     #[arg(short, long, group = "rules")]
     pub all: bool,
 
+    /// Deploy default set of tracked files to work tree alias.
     #[arg(short, long, group = "rules")]
     pub default: bool,
 }
@@ -107,15 +124,19 @@ struct DeployOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct UndeployOptions {
+    /// Name of cluster to deploy tracked files from.
     #[arg(required = true, value_name = "cluster_name")]
     pub cluster_name: String,
 
+    /// List of sparsity rules to match tracked files to undeploy.
     #[arg(group = "rules", value_name = "sparsity_rule")]
     pub sparsity_rules: Vec<String>,
 
+    /// Undeploy all tracked files to work tree alias.
     #[arg(short, long, group = "rules")]
     pub all: bool,
 
+    /// Undeploy default set of tracked files to work tree alias.
     #[arg(short, long, group = "rules")]
     pub default: bool,
 }
@@ -123,12 +144,15 @@ struct UndeployOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct ListOptions {
+    /// List current sparsity rules of target cluster.
     #[arg(group = "target", short, long, value_name = "cluster_name")]
     pub sparsity_rules: Option<String>,
 
+    /// List only deployed clusters.
     #[arg(group = "target", short, long)]
     pub deployed: bool,
 
+    /// List only undeployed clusters.
     #[arg(group = "target", short, long)]
     pub undeployed: bool,
 }
@@ -136,6 +160,7 @@ struct ListOptions {
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
 struct RemoveOptions {
+    /// Name of cluster to remove from cluster store.
     #[arg(required = true)]
     pub cluster_name: String,
 }
@@ -182,7 +207,7 @@ fn run_init(opts: InitOptions) -> Result<()> {
     };
 
     let _ = Cluster::try_new_init(
-        cluster_store_dir()?.join(format!("{}.git", opts.name)),
+        cluster_store_dir()?.join(format!("{}.git", opts.cluster_name)),
         definition,
     )?;
 
