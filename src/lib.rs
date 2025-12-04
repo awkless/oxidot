@@ -109,12 +109,15 @@ impl Store {
     pub fn remove(&mut self, name: impl AsRef<str>) -> Result<Cluster> {
         info!("remove {:?} from cluster store", name.as_ref());
         let cluster_path = self.store_path.join(format!("{}.git", name.as_ref()));
+        let cluster = self.clusters
+            .remove(name.as_ref())
+            .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))?;
+        cluster.undeploy_all()?;
+
         remove_dir_all(&cluster_path)
             .with_context(|| anyhow!("failed to remove {:?} from store", name.as_ref()))?;
 
-        self.clusters
-            .remove(name.as_ref())
-            .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
+        Ok(cluster)
     }
 
     /// Get cluster from the store.
