@@ -573,6 +573,36 @@ impl Cluster {
         Ok(())
     }
 
+    /// Undeploy default sparsity rules of cluster.
+    ///
+    /// Uses the sparsity rules defined in the cluster's definition file. Will
+    /// not override existing rules in sparse checkout configuration file.
+    ///
+    /// # Errors
+    ///
+    /// - Will fail if sparse checkout configuration file cannot be opened,
+    ///   read, and written to for whatever reason.
+    /// - Will fail if checkout files.
+    #[instrument(skip(self), level = "debug")]
+    pub fn undeploy_default_rules(&self) -> Result<()> {
+        info!("undeploy default sparsity rules of {:?}", self.repository.path().display());
+        if self.is_empty() {
+            warn!("cluster {:?} is empty", self.repository.path().display());
+            return Ok(());
+        }
+
+        if let Some(default) = &self.definition.settings.include {
+            self.sparse_checkout.remove_rules(default)?;
+        } else {
+            warn!("cluster does not have default sparsity rules to use");
+        }
+
+        let output = self.gitcall_non_interactive(["checkout"])?;
+        info!("{output}");
+
+        Ok(())
+    }
+
     /// Check if cluster is deployed.
     ///
     /// Checks if cluster is deployed by seeing if any file content exists in
