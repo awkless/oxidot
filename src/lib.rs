@@ -370,7 +370,7 @@ impl Cluster {
     /// - Will fail if missing configuration settings cannot be set.
     #[instrument(skip(path), level = "debug")]
     pub fn try_new_open(path: impl AsRef<Path>) -> Result<Self> {
-        info!("open cluster: {:?}", path.as_ref().display());
+        debug!("open cluster: {:?}", path.as_ref().display());
         let repository = Repository::open(path.as_ref())?;
         let mut cluster = Self {
             repository,
