@@ -78,12 +78,10 @@ impl Store {
         }
 
         // TODO: Add checks for valid cluster store structure at some point.
-        let mut store = Self {
+        let store = Self {
             store_path,
             clusters,
         };
-
-        store.expand_work_tree_aliases()?;
 
         Ok(store)
     }
@@ -284,19 +282,6 @@ impl Store {
         Ok(())
     }
 
-    #[instrument(skip(self), level = "debug")]
-    fn expand_work_tree_aliases(&mut self) -> Result<()> {
-        trace!("Expand working directory aliases of nodes");
-        for cluster in self.clusters.values_mut() {
-            let expand = shellexpand::full(
-                cluster.definition.settings.work_tree_alias.as_path().to_string_lossy().as_ref(),
-            )?
-            .into_owned();
-            cluster.definition.settings.work_tree_alias = WorkTreeAlias::new(expand);
-        }
-
-        Ok(())
-    }
 }
 
 /// Cluster of dotfiles.
@@ -353,7 +338,7 @@ impl Cluster {
         config.set_str("core.sparseCheckout", "true")?;
         let sparse_checkout = SparseCheckout::new(path.as_ref())?;
 
-        let cluster = Self {
+        let mut cluster = Self {
             repository,
             definition,
             sparse_checkout,
@@ -365,6 +350,8 @@ impl Cluster {
             contents
         );
         cluster.stage_and_commit("cluster.toml", contents, "chore: add cluster.toml")?;
+        cluster.expand_work_tree_alias()?;
+        cluster.gitcall_non_interactive(["checkout"])?;
 
         Ok(cluster)
     }
@@ -389,6 +376,7 @@ impl Cluster {
             sparse_checkout: SparseCheckout::new(path.as_ref())?,
         };
         cluster.extract_cluster_definition()?;
+        cluster.expand_work_tree_alias()?;
 
         // INVARIANT: Do not show untracked files.
         let mut config = cluster.repository.config()?;
@@ -462,6 +450,7 @@ impl Cluster {
             sparse_checkout: SparseCheckout::new(path.as_ref())?,
         };
         cluster.extract_cluster_definition()?;
+        cluster.expand_work_tree_alias()?;
 
         Ok(cluster)
     }
@@ -909,6 +898,18 @@ impl Cluster {
 
         let matcher = builder.build().unwrap();
         !matcher.matched(relative_path, path.is_dir()).is_ignore()
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    fn expand_work_tree_alias(&mut self) -> Result<()> {
+        trace!("Expand working directory aliases of nodes");
+        let expand = shellexpand::full(
+            self.definition.settings.work_tree_alias.as_path().to_string_lossy().as_ref(),
+        )?
+        .into_owned();
+        self.definition.settings.work_tree_alias = WorkTreeAlias::new(expand);
+
+        Ok(())
     }
 }
 
