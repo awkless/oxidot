@@ -23,7 +23,7 @@ use std::{
     process::Command,
     time,
 };
-use tracing::{info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 /// Cluster store management.
 ///
@@ -824,11 +824,106 @@ impl Cluster {
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Result<()> {
+        let index_before = self.get_staged_paths()?;
         syscall_interactive("git", self.expand_bin_args(args))?;
-        self.sync_sparse_with_index()?;
+        let index_after = self.get_staged_paths()?;
+
+        // INVARIANT: Sync sparsity rules with index if and only if the index itself has changed.
+        let newly_added: Vec<PathBuf> = index_after.difference(&index_before).cloned().collect();
+        if !newly_added.is_empty() {
+            self.sync_sparse_with_new_files(&newly_added)?;
+        }
 
         Ok(())
     }
+
+    fn get_staged_paths(&self) -> Result<HashSet<PathBuf>> {
+        let index = self.repository.index()?;
+        let mut paths = HashSet::new();
+
+        for entry in index.iter() {
+            if let Ok(path_str) = std::str::from_utf8(&entry.path) {
+                paths.insert(PathBuf::from(path_str));
+            }
+        }
+
+        Ok(paths)
+    }
+
+    #[instrument(skip(self, new_files), level = "debug")]
+    fn sync_sparse_with_new_files(&self, new_files: &[PathBuf]) -> Result<()> {
+        let current_rules = self.sparse_checkout.current_rules()?;
+        let mut new_rules = Vec::new();
+
+        for path in new_files {
+            let full_path = self
+                .definition
+                .settings
+                .work_tree_alias
+                .as_path()
+                .join(path);
+
+            debug!(
+                "checking if {} matches existing sparse rules",
+                path.display()
+            );
+
+            if !self.does_path_match_sparse_rule(&current_rules, &full_path) {
+                debug!("adding new sparse rule for {}", path.display());
+                new_rules.push(path.display().to_string());
+            } else {
+                debug!("{} already covered by existing rules", path.display());
+            }
+        }
+
+        if !new_rules.is_empty() {
+            info!("adding {} new sparse rules", new_rules.len());
+            self.sparse_checkout.insert_rules(&new_rules)?;
+            syscall_non_interactive("git", self.expand_bin_args(["checkout"]))?;
+        }
+
+        Ok(())
+    }
+
+    fn does_path_match_sparse_rule(&self, rules: &[String], path: &Path) -> bool {
+        let root = self.definition.settings.work_tree_alias.as_path();
+        let relative_path = match path.strip_prefix(root) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        let mut builder = GitignoreBuilder::new(root);
+
+        // INVARIANT: Invert gitignore syntax to match sparsity rule syntax.
+        //   - Ignore everything by default.
+        //   - Sparsity rule "!dir/" means gitignore must ignore directory and all children.
+        //   - Sparsity rule "dir/" means gitignore must unignore directory and all children.
+        //   - Sparsity rule "!file" means gitignore must ignore file.
+        //   - Sparsity rule "file" means gitignore must unignore file.
+        builder.add_line(None, "/*").unwrap();
+        for rule in rules {
+            let is_negated = rule.starts_with('!');
+            let pattern = rule.trim_start_matches('!');
+            let is_dir = pattern.ends_with('/');
+
+            if is_negated {
+                builder.add_line(None, pattern).unwrap();
+                if is_dir {
+                    builder.add_line(None, &format!("{}**", pattern)).unwrap();
+                }
+            } else {
+                builder.add_line(None, &format!("!{}", pattern)).unwrap();
+                if is_dir {
+                    builder.add_line(None, &format!("!{}**", pattern)).unwrap();
+                }
+            }
+        }
+
+        let matcher = builder.build().unwrap();
+        !matcher
+            .matched_path_or_any_parents(relative_path, path.is_dir())
+            .is_ignore()
+    }
+
 
     fn extract_cluster_definition(&mut self) -> Result<()> {
         let commit = self.repository.head()?.peel_to_commit()?;
@@ -840,34 +935,6 @@ impl Cluster {
         let content = String::from_utf8_lossy(blob.content()).into_owned();
         self.definition = toml::de::from_str::<ClusterDefinition>(&content)?;
 
-        Ok(())
-    }
-
-    fn sync_sparse_with_index(&self) -> Result<()> {
-        let index = self.repository.index()?;
-        let current_rules = self.sparse_checkout.current_rules()?;
-        let mut new_rules = Vec::new();
-
-        for entry in index.iter() {
-            if let Ok(path_str) = std::str::from_utf8(&entry.path) {
-                let path = PathBuf::from(path_str);
-                let full_path = self
-                    .definition
-                    .settings
-                    .work_tree_alias
-                    .as_path()
-                    .join(&path);
-
-                if !self.does_path_match_sparse_rule(&current_rules, &full_path) {
-                    new_rules.push(path.display().to_string());
-                }
-            }
-
-            if !new_rules.is_empty() {
-                self.sparse_checkout.insert_rules(&new_rules)?;
-                syscall_non_interactive("git", self.expand_bin_args(["checkout"]))?;
-            }
-        }
         Ok(())
     }
 
@@ -901,7 +968,10 @@ impl Cluster {
         }
 
         let subcommand = args[0].to_string_lossy();
-        matches!(subcommand.as_ref(), "add" | "rm" | "mv" | "restore" | "reset")
+        matches!(
+            subcommand.as_ref(),
+            "add" | "rm" | "mv" | "restore" | "reset"
+        )
     }
 
     fn get_config_value(&self, config: &git2::Config, key: &str) -> Result<Option<String>> {
@@ -938,35 +1008,6 @@ impl Cluster {
         }
 
         Ok(entries)
-    }
-
-    fn does_path_match_sparse_rule(&self, rules: &[String], path: &Path) -> bool {
-        let root = self.definition.settings.work_tree_alias.as_path();
-        let relative_path = match path.strip_prefix(root) {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-
-        let mut builder = GitignoreBuilder::new(root);
-        // INVARIANT: Ignore everything by default.
-        builder.add_line(None, "/*").unwrap();
-
-        for rule in rules {
-            // INVARIANT: Negate/invert sparsity rules.
-            // - Sparse checkout rules use the same syntax as gitignore rules, but include
-            //   matching paths instead of ignoring them. So, we need to negate/invert these rules,
-            //   because the ignore crate API ties to ignore matching paths instead of including
-            //   them!
-            let whitelist_rule = if let Some(stripped) = rule.strip_prefix('!') {
-                stripped.to_string()
-            } else {
-                format!("!{}", rule)
-            };
-            builder.add_line(None, &whitelist_rule).unwrap();
-        }
-
-        let matcher = builder.build().unwrap();
-        !matcher.matched_path_or_any_parents(relative_path, path.is_dir()).is_ignore()
     }
 
     #[instrument(skip(self), level = "debug")]
