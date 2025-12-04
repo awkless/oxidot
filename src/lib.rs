@@ -13,7 +13,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Password, Text};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::hash_map::{Values, Iter},
+    collections::hash_map::{Iter, Values},
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     fmt,
@@ -110,7 +110,8 @@ impl Store {
     pub fn remove(&mut self, name: impl AsRef<str>) -> Result<Cluster> {
         info!("remove {:?} from cluster store", name.as_ref());
         let cluster_path = self.store_path.join(format!("{}.git", name.as_ref()));
-        let cluster = self.clusters
+        let cluster = self
+            .clusters
             .remove(name.as_ref())
             .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))?;
         cluster.undeploy_all()?;
@@ -281,7 +282,6 @@ impl Store {
 
         Ok(())
     }
-
 }
 
 /// Cluster of dotfiles.
@@ -815,7 +815,10 @@ impl Cluster {
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Result<()> {
-        syscall_interactive("git", self.expand_bin_args(args))
+        syscall_interactive("git", self.expand_bin_args(args))?;
+        self.sync_sparse_with_index()?;
+
+        Ok(())
     }
 
     fn extract_cluster_definition(&mut self) -> Result<()> {
@@ -831,6 +834,34 @@ impl Cluster {
         Ok(())
     }
 
+    fn sync_sparse_with_index(&self) -> Result<()> {
+        let index = self.repository.index()?;
+        let current_rules = self.sparse_checkout.current_rules()?;
+        let mut new_rules = Vec::new();
+
+        for entry in index.iter() {
+            if let Ok(path_str) = std::str::from_utf8(&entry.path) {
+                let path = PathBuf::from(path_str);
+                let full_path = self
+                    .definition
+                    .settings
+                    .work_tree_alias
+                    .as_path()
+                    .join(&path);
+
+                if !self.does_path_match_sparse_rule(&current_rules, &full_path) {
+                    new_rules.push(path.display().to_string());
+                }
+            }
+
+            if !new_rules.is_empty() {
+                self.sparse_checkout.insert_rules(&new_rules)?;
+                syscall_non_interactive("git", self.expand_bin_args(["checkout"]))?;
+            }
+        }
+        Ok(())
+    }
+
     fn expand_bin_args(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -843,11 +874,25 @@ impl Cluster {
             self.definition.settings.work_tree_alias.to_os_string(),
         ];
 
+        let mut user_args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+        if self.should_add_sparse_flag(&user_args) {
+            user_args.splice(1..1, ["--sparse".into()]);
+        }
+
         let mut bin_args: Vec<OsString> = Vec::new();
         bin_args.extend(path_args);
-        bin_args.extend(args.into_iter().map(Into::into));
+        bin_args.extend(user_args);
 
         bin_args
+    }
+
+    fn should_add_sparse_flag(&self, args: &[OsString]) -> bool {
+        if args.is_empty() {
+            return false;
+        }
+
+        let subcommand = args[0].to_string_lossy();
+        matches!(subcommand.as_ref(), "add" | "rm" | "mv" | "restore" | "reset")
     }
 
     fn get_config_value(&self, config: &git2::Config, key: &str) -> Result<Option<String>> {
@@ -919,7 +964,12 @@ impl Cluster {
     fn expand_work_tree_alias(&mut self) -> Result<()> {
         trace!("Expand working directory aliases of nodes");
         let expand = shellexpand::full(
-            self.definition.settings.work_tree_alias.as_path().to_string_lossy().as_ref(),
+            self.definition
+                .settings
+                .work_tree_alias
+                .as_path()
+                .to_string_lossy()
+                .as_ref(),
         )?
         .into_owned();
         self.definition.settings.work_tree_alias = WorkTreeAlias::new(expand);
