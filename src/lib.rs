@@ -8,14 +8,14 @@ use git2::{
     build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, ObjectType, RemoteCallbacks,
     Repository,
 };
-use indicatif::{MultiProgress, ProgressStyle, ProgressBar};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Password, Text};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     fmt::Write,
-    fs::{remove_dir_all, read_to_string, write, OpenOptions},
+    fs::{read_to_string, remove_dir_all, write, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
     time,
@@ -326,7 +326,9 @@ impl Cluster {
         .progress_chars("-Cco.");
         prompter.bar.set_style(style);
         prompter.bar.set_message(format!("{}", url.as_ref()));
-        prompter.bar.enable_steady_tick(std::time::Duration::from_millis(100));
+        prompter
+            .bar
+            .enable_steady_tick(std::time::Duration::from_millis(100));
 
         let mut throttle = time::Instant::now();
         let mut rc = RemoteCallbacks::new();
@@ -493,7 +495,10 @@ impl Cluster {
     /// - Will fail if checkout files.
     #[instrument(skip(self), level = "debug")]
     pub fn deploy_default_rules(&self) -> Result<()> {
-        info!("deploy default sparsity rules of {:?}", self.repository.path().display());
+        info!(
+            "deploy default sparsity rules of {:?}",
+            self.repository.path().display()
+        );
         if self.is_empty() {
             warn!("cluster {:?} is empty", self.repository.path().display());
             return Ok(());
@@ -510,7 +515,6 @@ impl Cluster {
 
         Ok(())
     }
-
 
     /// Undeploy file content from cluster based on a set of sparsity rules.
     ///
@@ -585,7 +589,10 @@ impl Cluster {
     /// - Will fail if checkout files.
     #[instrument(skip(self), level = "debug")]
     pub fn undeploy_default_rules(&self) -> Result<()> {
-        info!("undeploy default sparsity rules of {:?}", self.repository.path().display());
+        info!(
+            "undeploy default sparsity rules of {:?}",
+            self.repository.path().display()
+        );
         if self.is_empty() {
             warn!("cluster {:?} is empty", self.repository.path().display());
             return Ok(());
