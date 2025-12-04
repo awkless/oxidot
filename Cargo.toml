@@ -40,6 +40,7 @@ ignore = "0.4.25"
 indicatif = "0.18.3"
 inquire = "0.9.1"
 serde = { version = "1.0.228", features = ["derive"] }
+shellexpand = "3.1.1"
 toml = "0.9.8"
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
