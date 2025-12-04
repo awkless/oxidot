@@ -161,8 +161,8 @@ struct ListOptions {
 #[command(author, about, long_about)]
 struct RemoveOptions {
     /// Name of cluster to remove from cluster store.
-    #[arg(required = true)]
-    pub cluster_name: String,
+    #[arg(required = true, value_name = "cluster_name")]
+    pub cluster_name: Vec<String>,
 }
 
 fn main() {
@@ -286,7 +286,9 @@ fn run_list(opts: ListOptions) -> Result<()> {
 
 fn run_remove(opts: RemoveOptions) -> Result<()> {
     let mut store = Store::new(cluster_store_dir()?)?;
-    store.remove(opts.cluster_name)?;
+    for name in &opts.cluster_name {
+        store.remove(name)?;
+    }
 
     Ok(())
 }
