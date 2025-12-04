@@ -18,6 +18,7 @@ use std::{
     fs::{read_to_string, remove_dir_all, write, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
+    collections::hash_map::Iter,
     time,
 };
 use tracing::{info, instrument, warn};
@@ -136,6 +137,11 @@ impl Store {
             .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
     }
 
+    /// Iterate through cluster store entries.
+    pub fn iter(&self) -> Iter<'_, String, Cluster> {
+        self.clusters.iter()
+    }
+
     /// Make sure that a target cluster's dependencies exist in the store.
     ///
     /// Goes through the dependency listing (if any) of a cluster and goes
@@ -220,7 +226,7 @@ impl Store {
 /// 1. [ArchWiki - dotfiles](https://wiki.archlinux.org/title/Dotfiles#Tracking_dotfiles_directly_with_Git)
 pub struct Cluster {
     repository: Repository,
-    definition: ClusterDefinition,
+    pub definition: ClusterDefinition,
     sparse_checkout: SparseCheckout,
 }
 
