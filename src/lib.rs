@@ -403,7 +403,7 @@ impl Cluster {
         )?
         .progress_chars("-Cco.");
         prompter.bar.set_style(style);
-        prompter.bar.set_message(format!("{}", url.as_ref()));
+        prompter.bar.set_message(url.as_ref().to_string());
         prompter
             .bar
             .enable_steady_tick(std::time::Duration::from_millis(100));
