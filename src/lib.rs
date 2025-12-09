@@ -4,6 +4,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use auth_git2::{GitAuthenticator, Prompter};
+use futures::{stream, StreamExt};
 use git2::{
     build::RepoBuilder, Config, FetchOptions, IndexEntry, IndexTime, ObjectType, RemoteCallbacks,
     Repository,
@@ -13,7 +14,6 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Password, Text};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::hash_map::{Iter, Values},
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     fmt,
@@ -21,6 +21,7 @@ use std::{
     fs::{read_to_string, remove_dir_all, write, OpenOptions},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, Mutex, MutexGuard},
     time,
 };
 use tracing::{debug, info, instrument, trace, warn};
@@ -53,7 +54,7 @@ use tracing::{debug, info, instrument, trace, warn};
 /// 1. [`Cluster`](struct.Cluster)
 pub struct Store {
     store_path: PathBuf,
-    clusters: HashMap<String, Cluster>,
+    clusters: Arc<Mutex<HashMap<String, Cluster>>>,
 }
 
 impl Store {
@@ -80,7 +81,7 @@ impl Store {
         // TODO: Add checks for valid cluster store structure at some point.
         let store = Self {
             store_path,
-            clusters,
+            clusters: Arc::new(Mutex::new(clusters)),
         };
 
         Ok(store)
@@ -92,8 +93,9 @@ impl Store {
     /// given cluster already exists in the store, then the old cluster will be
     /// returned after the new cluster takes its place in the store. The name
     /// of the cluster is never updated.
-    pub fn insert(&mut self, name: impl Into<String>, cluster: Cluster) -> Option<Cluster> {
-        self.clusters.insert(name.into(), cluster)
+    pub fn insert(&self, name: impl Into<String>, cluster: Cluster) -> Option<Cluster> {
+        let mut clusters = self.clusters();
+        clusters.insert(name.into(), cluster)
     }
 
     /// Remove a cluster from the store.
@@ -107,11 +109,12 @@ impl Store {
     /// - Will fail if cluster cannot be removed from the cluster store path.
     /// - Will fail if cluster does not exist in the store.
     #[instrument(skip(self, name), level = "debug")]
-    pub fn remove(&mut self, name: impl AsRef<str>) -> Result<Cluster> {
+    pub fn remove(&self, name: impl AsRef<str>) -> Result<Cluster> {
         info!("remove {:?} from cluster store", name.as_ref());
         let cluster_path = self.store_path.join(format!("{}.git", name.as_ref()));
-        let cluster = self
-            .clusters
+        let mut clusters = self.clusters();
+
+        let cluster = clusters
             .remove(name.as_ref())
             .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))?;
         cluster.undeploy_all()?;
@@ -122,38 +125,25 @@ impl Store {
         Ok(cluster)
     }
 
-    /// Get cluster from the store.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if cluster does not exist in the store.
-    pub fn get(&self, name: impl AsRef<str>) -> Result<&Cluster> {
-        self.clusters
-            .get(name.as_ref())
-            .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
-    }
-
-    /// Get mutable cluster from the store.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if cluster does not exist in the store.
-    pub fn get_mut(&mut self, name: impl AsRef<str>) -> Result<&mut Cluster> {
-        self.clusters
-            .get_mut(name.as_ref())
-            .ok_or(anyhow!("cluster {:?} not in store", name.as_ref()))
+    pub fn with_clusters<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&HashMap<String, Cluster>) -> R,
+    {
+        let clusters = self.clusters();
+        f(&*clusters)
     }
 
     /// List all available clusters with full details.
     #[instrument(skip(self), level = "debug")]
     pub fn list_fully(&self) {
-        if self.clusters.is_empty() {
+        let clusters = self.clusters();
+        if clusters.is_empty() {
             warn!("cluster store is empty");
             return;
         }
 
         let mut listing = String::new();
-        for (name, entry) in self.clusters.iter() {
+        for (name, entry) in clusters.iter() {
             let status = if entry.is_deployed() {
                 "[  deployed]"
             } else {
@@ -173,13 +163,14 @@ impl Store {
     /// List currently deployed clusters.
     #[instrument(skip(self), level = "debug")]
     pub fn list_deployed(&self) {
-        if self.clusters.is_empty() {
+        let clusters = self.clusters();
+        if clusters.is_empty() {
             warn!("cluster store is empty");
             return;
         }
 
         let mut listing = String::new();
-        for (name, entry) in self.clusters.iter() {
+        for (name, entry) in clusters.iter() {
             if entry.is_deployed() {
                 let data = format!(
                     "{} -> {}\n",
@@ -195,13 +186,14 @@ impl Store {
     /// List currently undeployed clusters.
     #[instrument(skip(self), level = "debug")]
     pub fn list_undeployed(&self) {
-        if self.clusters.is_empty() {
+        let clusters = self.clusters();
+        if clusters.is_empty() {
             warn!("cluster store is empty");
             return;
         }
 
         let mut listing = String::new();
-        for (name, entry) in self.clusters.iter() {
+        for (name, entry) in clusters.iter() {
             if !entry.is_deployed() {
                 let data = format!(
                     "{} -> {}\n",
@@ -214,16 +206,6 @@ impl Store {
         info!("all undeployed clusters:\n{}", listing);
     }
 
-    /// Iterate through cluster store entries.
-    pub fn iter(&self) -> Iter<'_, String, Cluster> {
-        self.clusters.iter()
-    }
-
-    /// Iterate through cluster entires without the name.
-    pub fn values(&self) -> Values<'_, String, Cluster> {
-        self.clusters.values()
-    }
-
     /// Make sure that a target cluster's dependencies exist in the store.
     ///
     /// Goes through the dependency listing (if any) of a cluster and goes
@@ -234,26 +216,89 @@ impl Store {
     /// # Errors
     ///
     /// Will fail if any dependency cannot be properly cloned.
-    pub fn resolve_dependencies(&mut self, cluster_name: impl AsRef<str>) -> Result<Vec<String>> {
+    pub async fn resolve_dependencies(
+        &self,
+        cluster_name: impl AsRef<str>,
+        jobs: Option<usize>,
+    ) -> Result<Vec<String>> {
+        let unresolved = self.find_unresolved_dependencies(cluster_name.as_ref())?;
+        if unresolved.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let bars = MultiProgress::new();
-        let mut resolved = Vec::new();
+        let results = Arc::new(Mutex::new(VecDeque::new()));
+        let store_path = self.store_path.clone();
+        let clusters = self.clusters.clone();
+
+        stream::iter(unresolved.clone())
+            .for_each_concurrent(jobs, |dep_name| {
+                let results = results.clone();
+                let bars = bars.clone();
+                let store_path = store_path.clone();
+                let clusters = clusters.clone();
+
+                async move {
+                    let bar = bars.add(ProgressBar::no_length());
+                    let clusters_arc_inner = clusters.clone();
+                    let store_path_inner = store_path.clone();
+                    let bar_inner = bar.clone();
+                    let dep_name_inner = dep_name.clone();
+
+                    let result = tokio::task::spawn_blocking(move || {
+                        Self::clone_missing_cluster(
+                            &clusters_arc_inner,
+                            &store_path_inner,
+                            bar_inner,
+                            &dep_name_inner,
+                        )
+                    })
+                    .await;
+
+                    let mut guard = results.lock().unwrap();
+                    guard.push_back(
+                        result.map_err(|err| anyhow!("Failed to clone {dep_name:?}: {err:?}")),
+                    );
+                    drop(guard);
+                    // TODO: Is it okay to finish and clear the bar here?
+                    bar.finish_and_clear();
+                }
+            })
+            .await;
+
+        // INVARIANT: Collect and report failures encountered.
+        let results = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
+        let resolved = results.into_iter().flatten().collect::<Result<Vec<_>>>()?;
+        let resolved_names = resolved
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+
+        // INVARIANT: Insert resolved cluster dependencies into store.
+        for (name, entry) in resolved {
+            clusters.lock().unwrap().insert(name.clone(), entry);
+        }
+
+        Ok(resolved_names)
+    }
+
+    fn find_unresolved_dependencies(&self, cluster_name: &str) -> Result<Vec<String>> {
+        let clusters = self.clusters();
+        let mut unresolved = Vec::new();
         let mut visited = HashSet::new();
         let mut stack = VecDeque::new();
-        stack.push_back(cluster_name.as_ref().to_string());
+        stack.push_back(cluster_name.to_string());
 
         while let Some(current) = stack.pop_back() {
             if !visited.insert(current.clone()) {
                 continue;
             }
 
-            if !self.clusters.contains_key(&current) {
-                let bar = bars.add(ProgressBar::no_length());
-                self.clone_missing_cluster(bar.clone(), &current)?;
-                bar.finish();
+            if !clusters.contains_key(&current) {
+                unresolved.push(current.clone());
             }
 
-            if let Some(cluster) = self.clusters.get(&current) {
-                resolved.push(current.clone());
+            if let Some(cluster) = clusters.get(&current) {
                 if let Some(deps) = &cluster.definition.dependencies {
                     for dep in deps {
                         if !visited.contains(&dep.name) {
@@ -264,23 +309,43 @@ impl Store {
             }
         }
 
-        Ok(resolved)
+        Ok(unresolved)
     }
 
-    fn clone_missing_cluster(&mut self, bar: ProgressBar, name: impl AsRef<str>) -> Result<()> {
-        let dep_info = self
-            .clusters
+    fn clone_missing_cluster(
+        clusters_arc: &Arc<Mutex<HashMap<String, Cluster>>>,
+        store_path: &Path,
+        bar: ProgressBar,
+        name: &str,
+    ) -> Result<(String, Cluster)> {
+        let clusters = clusters_arc.lock().unwrap();
+        let dep_info = clusters
             .values()
             .flat_map(|c| c.definition.dependencies.iter().flatten())
-            .find(|d| d.name == name.as_ref())
-            .ok_or_else(|| anyhow!("dependency {:?} no declared", name.as_ref()))?;
+            .find(|d| d.name == name)
+            .ok_or_else(|| anyhow!("dependency {:?} not declared", name))?;
 
-        let path = self.store_path.join(format!("{}.git", name.as_ref()));
+        let url = dep_info.url.clone();
+        drop(clusters); // Release lock before cloning
+
+        let style = ProgressStyle::with_template(
+            "{elapsed_precise:.green}  {msg:<50}  [{wide_bar:.yellow/blue}]",
+        )
+        .unwrap()
+        .progress_chars("-Cco.");
+        bar.set_style(style);
+        bar.set_message(format!("{}", &name));
+        bar.enable_steady_tick(std::time::Duration::from_millis(100));
         let auth_bar = ProgressBarAuthenticator::new(bar.clone());
-        let cluster = Cluster::try_new_clone(&dep_info.url, path, auth_bar)?;
-        self.clusters.insert(name.as_ref().into(), cluster);
+        let path = store_path.join(format!("{}.git", name));
+        let cluster = Cluster::try_new_clone(&url, path, auth_bar)?;
 
-        Ok(())
+        Ok((name.to_string(), cluster))
+    }
+
+    #[inline]
+    fn clusters(&self) -> MutexGuard<'_, HashMap<String, Cluster>> {
+        self.clusters.lock().unwrap()
     }
 }
 
@@ -924,7 +989,6 @@ impl Cluster {
             .is_ignore()
     }
 
-
     fn extract_cluster_definition(&mut self) -> Result<()> {
         let commit = self.repository.head()?.peel_to_commit()?;
         let tree = commit.tree()?;
@@ -990,14 +1054,17 @@ impl Cluster {
         let mut trees_and_paths = VecDeque::new();
         trees_and_paths.push_front((tree, PathBuf::new()));
 
+        // Use DFS to traverse index tree.
         while let Some((tree, path)) = trees_and_paths.pop_front() {
             for tree_entry in &tree {
                 match tree_entry.kind() {
+                    // INVARIANT: Hit a tree? Traverse it!
                     Some(ObjectType::Tree) => {
                         let next_tree = self.repository.find_tree(tree_entry.id())?;
                         let next_path = path.join(bytes_to_path(tree_entry.name_bytes()));
                         trees_and_paths.push_front((next_tree, next_path));
                     }
+                    // INVARIANT: Hit a blob? Record our current path!
                     Some(ObjectType::Blob) => {
                         let full_path = path.join(bytes_to_path(tree_entry.name_bytes()));
                         entries.push(full_path);
@@ -1025,6 +1092,13 @@ impl Cluster {
         self.definition.settings.work_tree_alias = WorkTreeAlias::new(expand);
 
         Ok(())
+    }
+}
+
+impl fmt::Debug for Cluster {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "located at {:?}", self.path().display())?;
+        write!(f, "definition {:#?}\n", self.definition)
     }
 }
 
@@ -1184,7 +1258,7 @@ impl fmt::Display for WorkTreeAlias {
 ///
 /// - [Man page sparse checkout](https://git-scm.com/docs/git-sparse-checkout)
 /// - [`Cluster`](struct.Cluster)
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SparseCheckout {
     sparse_path: PathBuf,
 }

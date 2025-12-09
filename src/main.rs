@@ -5,7 +5,7 @@ use oxidot::{
     cluster_store_dir, Cluster, ClusterDefinition, ProgressBarAuthenticator, Store, WorkTreeAlias,
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar};
 use std::{ffi::OsString, path::PathBuf, process::exit};
@@ -25,10 +25,10 @@ struct Cli {
 }
 
 impl Cli {
-    fn run(self) -> Result<()> {
+    async fn run(self) -> Result<()> {
         match self.command {
             Command::Init(opts) => run_init(opts),
-            Command::Clone(opts) => run_clone(opts),
+            Command::Clone(opts) => run_clone(opts).await,
             Command::Deploy(opts) => run_deploy(opts),
             Command::Undeploy(opts) => run_undeploy(opts),
             Command::List(opts) => run_list(opts),
@@ -99,6 +99,9 @@ struct CloneOptions {
     /// URL of remote to clone from.
     #[arg(required = true, value_name = "url")]
     pub url: String,
+
+    /// Number of jobs to run during dependency resoultion.
+    pub jobs: Option<usize>,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -168,7 +171,8 @@ struct RemoveOptions {
     pub cluster_name: Vec<String>,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let layer = fmt::layer()
         .compact()
         .with_target(false)
@@ -182,7 +186,7 @@ fn main() {
         .with(filter)
         .init();
 
-    if let Err(error) = run() {
+    if let Err(error) = run().await {
         error!("{error:?}");
         exit(1);
     }
@@ -190,8 +194,8 @@ fn main() {
     exit(0)
 }
 
-fn run() -> Result<()> {
-    Cli::parse().run()
+async fn run() -> Result<()> {
+    Cli::parse().run().await
 }
 
 fn run_init(opts: InitOptions) -> Result<()> {
@@ -217,9 +221,8 @@ fn run_init(opts: InitOptions) -> Result<()> {
     Ok(())
 }
 
-fn run_clone(opts: CloneOptions) -> Result<()> {
-    let mut store = Store::new(cluster_store_dir()?)?;
-
+async fn run_clone(opts: CloneOptions) -> Result<()> {
+    let store = Store::new(cluster_store_dir()?)?;
     let path = cluster_store_dir()?.join(format!("{}.git", &opts.cluster_name));
     let bars = MultiProgress::new();
     let bar = bars.add(ProgressBar::no_length());
@@ -227,61 +230,85 @@ fn run_clone(opts: CloneOptions) -> Result<()> {
 
     let cluster = Cluster::try_new_clone(&opts.url, path, auth_bar)?;
     store.insert(&opts.cluster_name, cluster);
-    store.resolve_dependencies(&opts.cluster_name)?;
-    for entry in store.values() {
-        entry.deploy_default_rules()?;
-    }
+    let resolved = store
+        .resolve_dependencies(&opts.cluster_name, opts.jobs)
+        .await?;
+    store.with_clusters(|clusters| {
+        let entries = resolved
+            .into_iter()
+            .map(|dep| clusters.get(&dep).unwrap())
+            .collect::<Vec<_>>();
+        for entry in entries {
+            entry.deploy_default_rules()?;
+        }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 fn run_deploy(opts: DeployOptions) -> Result<()> {
     let store = Store::new(cluster_store_dir()?)?;
-    let cluster = store.get(&opts.cluster_name)?;
+    store.with_clusters(|clusters| {
+        let cluster = clusters
+            .get(&opts.cluster_name)
+            .ok_or(anyhow!("cluster {:?} not found", &opts.cluster_name))?;
 
-    if !opts.sparsity_rules.is_empty() {
-        cluster.deploy_rules(opts.sparsity_rules)?;
-    }
+        if !opts.sparsity_rules.is_empty() {
+            return cluster.deploy_rules(opts.sparsity_rules);
+        }
 
-    if opts.all {
-        cluster.deploy_all()?;
-    }
+        if opts.all {
+            return cluster.deploy_all();
+        }
 
-    if opts.default {
-        cluster.deploy_default_rules()?;
-    }
+        if opts.default {
+            return cluster.deploy_default_rules();
+        }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 fn run_undeploy(opts: UndeployOptions) -> Result<()> {
     let store = Store::new(cluster_store_dir()?)?;
-    let cluster = store.get(&opts.cluster_name)?;
+    store.with_clusters(|clusters| {
+        let cluster = clusters
+            .get(&opts.cluster_name)
+            .ok_or(anyhow!("cluster {:?} not found", &opts.cluster_name))?;
 
-    if !opts.sparsity_rules.is_empty() {
-        cluster.undeploy_rules(opts.sparsity_rules)?;
-    }
+        if !opts.sparsity_rules.is_empty() {
+            return cluster.undeploy_rules(opts.sparsity_rules);
+        }
 
-    if opts.all {
-        cluster.undeploy_all()?;
-    }
+        if opts.all {
+            return cluster.undeploy_all();
+        }
 
-    if opts.default {
-        cluster.undeploy_default_rules()?;
-    }
+        if opts.default {
+            return cluster.undeploy_default_rules();
+        }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 fn run_list(opts: ListOptions) -> Result<()> {
     let store = Store::new(cluster_store_dir()?)?;
 
     if let Some(cluster_name) = opts.sparsity_rules {
-        let cluster = store.get(cluster_name)?;
-        cluster.show_deploy_rules()?;
+        store.with_clusters(|clusters| {
+            clusters
+                .get(&cluster_name)
+                .ok_or(anyhow!("cluster {:?} not found", &cluster_name))?
+                .show_deploy_rules()
+        })?;
     } else if let Some(cluster_name) = opts.files {
-        let cluster = store.get(cluster_name)?;
-        cluster.show_tracked_files()?;
+        store.with_clusters(|clusters| {
+            clusters
+                .get(&cluster_name)
+                .ok_or(anyhow!("cluster {:?} not found", &cluster_name))?
+                .show_tracked_files()
+        })?;
     } else if opts.deployed {
         store.list_deployed();
     } else if opts.undeployed {
@@ -294,7 +321,7 @@ fn run_list(opts: ListOptions) -> Result<()> {
 }
 
 fn run_remove(opts: RemoveOptions) -> Result<()> {
-    let mut store = Store::new(cluster_store_dir()?)?;
+    let store = Store::new(cluster_store_dir()?)?;
     for name in &opts.cluster_name {
         store.remove(name)?;
     }
