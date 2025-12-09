@@ -1032,10 +1032,7 @@ impl Cluster {
         }
 
         let subcommand = args[0].to_string_lossy();
-        matches!(
-            subcommand.as_ref(),
-            "add" | "rm" | "mv" | "restore" | "reset"
-        )
+        matches!(subcommand.as_ref(), "add" | "rm" | "mv")
     }
 
     fn get_config_value(&self, config: &git2::Config, key: &str) -> Result<Option<String>> {
