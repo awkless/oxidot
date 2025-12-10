@@ -254,7 +254,7 @@ impl Store {
                     let bar_inner = bar.clone();
                     let dep_name_inner = dep_name.clone();
 
-                    let result = tokio::task::spawn_blocking(move || {
+                    let result = tokio::spawn(async move {
                         Self::clone_missing_cluster(
                             &clusters_arc_inner,
                             &store_path_inner,
