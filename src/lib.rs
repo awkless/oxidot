@@ -2,6 +2,14 @@
 // SPDX-FileCopyrightText: 2024-2025 Eric Urban <hydrogen18@gmail.com>
 // SPDX-License-Identifier: MIT
 
+#![warn(
+    clippy::complexity,
+    clippy::correctness,
+    missing_debug_implementations,
+    rust_2021_compatibility
+)]
+#![doc(issue_tracker_base_url = "https://github.com/awkless/oxidot/issues")]
+
 use anyhow::{anyhow, Context, Result};
 use auth_git2::{GitAuthenticator, Prompter};
 use futures::{stream, StreamExt};
@@ -52,6 +60,7 @@ use tracing::{debug, info, instrument, trace, warn};
 /// # See Also
 ///
 /// 1. [`Cluster`](struct.Cluster)
+#[derive(Debug)]
 pub struct Store {
     store_path: PathBuf,
     clusters: Arc<Mutex<HashMap<String, Cluster>>>,
@@ -130,7 +139,7 @@ impl Store {
         F: FnOnce(&HashMap<String, Cluster>) -> R,
     {
         let clusters = self.clusters();
-        f(&*clusters)
+        f(&clusters)
     }
 
     /// List all available clusters with full details.
@@ -334,7 +343,7 @@ impl Store {
         .unwrap()
         .progress_chars("-Cco.");
         bar.set_style(style);
-        bar.set_message(format!("{}", &name));
+        bar.set_message(name.to_string());
         bar.enable_steady_tick(std::time::Duration::from_millis(100));
         let auth_bar = ProgressBarAuthenticator::new(bar.clone());
         let path = store_path.join(format!("{}.git", name));
@@ -1094,8 +1103,8 @@ impl Cluster {
 
 impl fmt::Debug for Cluster {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "located at {:?}", self.path().display())?;
-        write!(f, "definition {:#?}\n", self.definition)
+        writeln!(f, "located at {:?}", self.path().display())?;
+        writeln!(f, "definition {:#?}", self.definition)
     }
 }
 
@@ -1394,7 +1403,7 @@ impl SparseCheckout {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ProgressBarAuthenticator {
     pub(crate) bar: ProgressBar,
 }
