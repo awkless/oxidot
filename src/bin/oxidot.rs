@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 use oxidot::{
-    cluster_store_dir, Cluster, ClusterDefinition, ProgressBarAuthenticator, Store, WorkTreeAlias,
+    path::default_cluster_store_dir, Cluster, ClusterDefinition, ProgressBarAuthenticator, Store,
+    WorkTreeAlias,
 };
 
 use anyhow::{anyhow, Result};
@@ -214,7 +215,7 @@ fn run_init(opts: InitOptions) -> Result<()> {
     };
 
     let _ = Cluster::try_new_init(
-        cluster_store_dir()?.join(format!("{}.git", opts.cluster_name)),
+        default_cluster_store_dir()?.join(format!("{}.git", opts.cluster_name)),
         definition,
     )?;
 
@@ -222,8 +223,8 @@ fn run_init(opts: InitOptions) -> Result<()> {
 }
 
 async fn run_clone(opts: CloneOptions) -> Result<()> {
-    let store = Store::new(cluster_store_dir()?)?;
-    let path = cluster_store_dir()?.join(format!("{}.git", &opts.cluster_name));
+    let store = Store::new(default_cluster_store_dir()?)?;
+    let path = default_cluster_store_dir()?.join(format!("{}.git", &opts.cluster_name));
     let bars = MultiProgress::new();
     let bar = bars.add(ProgressBar::no_length());
     let auth_bar = ProgressBarAuthenticator::new(bar);
@@ -247,7 +248,7 @@ async fn run_clone(opts: CloneOptions) -> Result<()> {
 }
 
 fn run_deploy(opts: DeployOptions) -> Result<()> {
-    let store = Store::new(cluster_store_dir()?)?;
+    let store = Store::new(default_cluster_store_dir()?)?;
     store.with_clusters(|clusters| {
         let cluster = clusters
             .get(&opts.cluster_name)
@@ -270,7 +271,7 @@ fn run_deploy(opts: DeployOptions) -> Result<()> {
 }
 
 fn run_undeploy(opts: UndeployOptions) -> Result<()> {
-    let store = Store::new(cluster_store_dir()?)?;
+    let store = Store::new(default_cluster_store_dir()?)?;
     store.with_clusters(|clusters| {
         let cluster = clusters
             .get(&opts.cluster_name)
@@ -293,7 +294,7 @@ fn run_undeploy(opts: UndeployOptions) -> Result<()> {
 }
 
 fn run_list(opts: ListOptions) -> Result<()> {
-    let store = Store::new(cluster_store_dir()?)?;
+    let store = Store::new(default_cluster_store_dir()?)?;
 
     if let Some(cluster_name) = opts.sparsity_rules {
         store.with_clusters(|clusters| {
@@ -321,7 +322,7 @@ fn run_list(opts: ListOptions) -> Result<()> {
 }
 
 fn run_remove(opts: RemoveOptions) -> Result<()> {
-    let store = Store::new(cluster_store_dir()?)?;
+    let store = Store::new(default_cluster_store_dir()?)?;
     for name in &opts.cluster_name {
         store.remove(name)?;
     }
@@ -332,7 +333,8 @@ fn run_remove(opts: RemoveOptions) -> Result<()> {
 fn run_git(opts: Vec<OsString>) -> Result<()> {
     // TODO: Allow for multiple clusters to be targeted.
     let target = opts[0].to_string_lossy().into_owned();
-    let cluster = Cluster::try_new_open(cluster_store_dir()?.join(format!("{}.git", target)))?;
+    let cluster =
+        Cluster::try_new_open(default_cluster_store_dir()?.join(format!("{}.git", target)))?;
     cluster.gitcall_interactive(opts[1..].to_vec())?;
 
     Ok(())

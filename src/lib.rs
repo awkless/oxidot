@@ -10,6 +10,10 @@
 )]
 #![doc(issue_tracker_base_url = "https://github.com/awkless/oxidot/issues")]
 
+pub mod path;
+
+use crate::path::home_dir;
+
 use anyhow::{anyhow, Context, Result};
 use auth_git2::{GitAuthenticator, Prompter};
 use futures::{stream, StreamExt};
@@ -1467,33 +1471,6 @@ impl Prompter for ProgressBarAuthenticator {
             Some(password)
         })
     }
-}
-
-/// Determine path to user's home directory.
-///
-/// User's home directory acts as the default path for work tree aliases if
-/// no other path is specified.
-///
-/// # Errors
-///
-/// Will fail if user's home directory cannot be determined for whatever
-/// reason.
-pub fn home_dir() -> Result<PathBuf> {
-    dirs::home_dir().ok_or(anyhow!("cannot determine path to home directory"))
-}
-
-/// Determine path to cluster store directory.
-///
-/// The cluster store path is set to `$XDG_DATA_HOME/oxidot-store` by default.
-///
-/// # Errors
-///
-/// Will fail if user's home directory cannot be determined for whatever
-/// reason.
-pub fn cluster_store_dir() -> Result<PathBuf> {
-    dirs::data_dir()
-        .map(|path| path.join("oxidot-store"))
-        .ok_or(anyhow!("cannot determine path to cluster store"))
 }
 
 fn syscall_non_interactive(
