@@ -10,9 +10,10 @@
 )]
 #![doc(issue_tracker_base_url = "https://github.com/awkless/oxidot/issues")]
 
+pub mod config;
 pub mod path;
 
-use crate::path::home_dir;
+use crate::config::ClusterDefinition;
 
 use anyhow::{anyhow, Context, Result};
 use auth_git2::{GitAuthenticator, Prompter};
@@ -24,7 +25,6 @@ use git2::{
 use ignore::gitignore::GitignoreBuilder;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Password, Text};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
@@ -36,7 +36,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time,
 };
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, warn};
 
 /// Cluster store management.
 ///
@@ -418,7 +418,7 @@ impl Cluster {
         config.set_str("advice.updateSparsePath", "false")?;
         let sparse_checkout = SparseCheckout::new(path.as_ref())?;
 
-        let mut cluster = Self {
+        let cluster = Self {
             repository,
             definition,
             sparse_checkout,
@@ -430,7 +430,6 @@ impl Cluster {
             contents
         );
         cluster.stage_and_commit("cluster.toml", contents, "chore: add cluster.toml")?;
-        cluster.expand_work_tree_alias()?;
         cluster.gitcall_non_interactive(["checkout"])?;
 
         Ok(cluster)
@@ -456,7 +455,6 @@ impl Cluster {
             sparse_checkout: SparseCheckout::new(path.as_ref())?,
         };
         cluster.extract_cluster_definition()?;
-        cluster.expand_work_tree_alias()?;
 
         // INVARIANT: Do not show untracked files.
         let mut config = cluster.repository.config()?;
@@ -543,7 +541,6 @@ impl Cluster {
             sparse_checkout: SparseCheckout::new(path.as_ref())?,
         };
         cluster.extract_cluster_definition()?;
-        cluster.expand_work_tree_alias()?;
 
         Ok(cluster)
     }
@@ -1086,137 +1083,12 @@ impl Cluster {
 
         Ok(entries)
     }
-
-    #[instrument(skip(self), level = "debug")]
-    fn expand_work_tree_alias(&mut self) -> Result<()> {
-        trace!("Expand working directory aliases of nodes");
-        let expand = shellexpand::full(
-            self.definition
-                .settings
-                .work_tree_alias
-                .as_path()
-                .to_string_lossy()
-                .as_ref(),
-        )?
-        .into_owned();
-        self.definition.settings.work_tree_alias = WorkTreeAlias::new(expand);
-
-        Ok(())
-    }
 }
 
 impl fmt::Debug for Cluster {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "located at {:?}", self.path().display())?;
         writeln!(f, "definition {:#?}", self.definition)
-    }
-}
-
-/// Cluster definition layout.
-///
-/// All clusters in oxidot come with a __definition__ file. This file is a
-/// simple configuration file that details how the cluster should be
-/// configured and managed by not only the cluster itself, but by the cluster
-/// store manager as well.
-///
-/// # General Layout
-///
-/// A cluster definition is composed of two basic parts: settings and
-/// dependencies. The settings section simply defines how the cluster should
-/// be configured. The dependencies section lists all dependencies that should
-/// be deployed along with the cluster itself. In other words, clusters can
-/// list other clusters as dependencies.
-///
-/// # Location
-///
-/// Cluster definitions must always exist at the top-level of a cluster in a
-/// special file named "cluster.toml". If this file cannot be found, then the
-/// cluster is invalid.
-///
-/// # See Also
-///
-/// - [`Cluster`](struct.Cluster)
-/// - [`Store`](struct.Store)
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
-pub struct ClusterDefinition {
-    pub settings: ClusterSettings,
-    pub dependencies: Option<Vec<ClusterDependency>>,
-}
-
-/// Cluster configuration settings.
-///
-/// Standard settings to use for any given cluster.
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
-pub struct ClusterSettings {
-    /// Brief description of what the cluster contains.
-    pub description: String,
-
-    /// Remove URL to clone cluster from.
-    pub url: String,
-
-    /// Work tree alias to use for deployment.
-    pub work_tree_alias: WorkTreeAlias,
-
-    /// Default listing of file content to deploy to work tree alias.
-    pub include: Option<Vec<String>>,
-}
-
-/// Cluster dependency listing.
-///
-/// List of other clusters to use as dependencies for given cluster.
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
-pub struct ClusterDependency {
-    /// Name of the cluster dependency.
-    pub name: String,
-
-    /// Remote URL to clone cluster from if it isn't in the cluster store.
-    pub url: String,
-
-    /// Additional listing of file content to deploy.
-    pub include: Option<Vec<String>>,
-}
-
-/// Work tree alias path for cluster.
-///
-/// # See also
-///
-/// - [`Cluster`](struct.Cluster)
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
-pub struct WorkTreeAlias(pub PathBuf);
-
-impl WorkTreeAlias {
-    /// Construct new work tree alias path.
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self(path.into())
-    }
-
-    /// Construct work tree alias path pointing to user's home directory.
-    ///
-    /// The user's home directory is the default path of a work tree alias
-    /// if no other path is specified.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if user's home directory cannot be determined for whatever
-    /// reason.
-    pub fn try_default() -> Result<Self> {
-        Ok(Self(home_dir()?))
-    }
-
-    /// Helper to convert work tree alias path to [`OsString`].
-    pub fn to_os_string(&self) -> OsString {
-        OsString::from(self.0.to_string_lossy().into_owned())
-    }
-
-    /// Treat as path slice.
-    pub fn as_path(&self) -> &Path {
-        self.0.as_path()
-    }
-}
-
-impl fmt::Display for WorkTreeAlias {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str(self.0.display().to_string().as_str())
     }
 }
 

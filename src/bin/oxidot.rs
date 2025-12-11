@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 use oxidot::{
-    path::default_cluster_store_dir, Cluster, ClusterDefinition, ProgressBarAuthenticator, Store,
-    WorkTreeAlias,
+    config::{ClusterDefinition, WorkTreeAlias},
+    path::{default_cluster_store_dir, home_dir},
+    Cluster, ProgressBarAuthenticator, Store,
 };
 
 use anyhow::{anyhow, Result};
@@ -211,7 +212,7 @@ fn run_init(opts: InitOptions) -> Result<()> {
     };
     definition.settings.work_tree_alias = match opts.work_tree_alias {
         Some(path) => WorkTreeAlias::new(path),
-        None => WorkTreeAlias::try_default()?,
+        None => WorkTreeAlias::new(home_dir()?),
     };
 
     let _ = Cluster::try_new_init(
