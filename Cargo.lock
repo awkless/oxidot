@@ -889,6 +889,7 @@ dependencies = [
  "shellexpand",
  "simple_test_case",
  "simple_txtar",
+ "thiserror",
  "tokio",
  "toml",
  "tracing",
