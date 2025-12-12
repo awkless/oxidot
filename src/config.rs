@@ -127,6 +127,30 @@ impl Display for WorkTreeAlias {
     }
 }
 
+impl From<&str> for WorkTreeAlias {
+    fn from(data: &str) -> Self {
+        WorkTreeAlias::new(data)
+    }
+}
+
+impl From<String> for WorkTreeAlias {
+    fn from(data: String) -> Self {
+        WorkTreeAlias::new(data)
+    }
+}
+
+impl From<&Path> for WorkTreeAlias {
+    fn from(path: &Path) -> Self {
+        WorkTreeAlias::new(path)
+    }
+}
+
+impl From<PathBuf> for WorkTreeAlias {
+    fn from(path: PathBuf) -> Self {
+        WorkTreeAlias::new(path)
+    }
+}
+
 /// Configuration error types.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum ConfigError {
