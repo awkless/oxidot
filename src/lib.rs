@@ -10,9 +10,11 @@
 )]
 #![doc(issue_tracker_base_url = "https://github.com/awkless/oxidot/issues")]
 
+pub mod cluster;
 pub mod config;
 pub mod path;
 
+use crate::cluster::sparse::{InvertedGitignore, SparsityDrafter};
 use crate::config::ClusterDefinition;
 
 use anyhow::{anyhow, Context, Result};
@@ -29,8 +31,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{OsStr, OsString},
     fmt,
-    fmt::Write,
-    fs::{read_to_string, remove_dir_all, write, OpenOptions},
+    fs::remove_dir_all,
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex, MutexGuard},
@@ -387,7 +388,7 @@ impl Store {
 pub struct Cluster {
     repository: Repository,
     pub definition: ClusterDefinition,
-    sparse_checkout: SparseCheckout,
+    sparse_checkout: SparsityDrafter<InvertedGitignore>,
 }
 
 impl Cluster {
@@ -416,7 +417,8 @@ impl Cluster {
         config.set_str("core.sparseCheckout", "true")?;
         // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
         config.set_str("advice.updateSparsePath", "false")?;
-        let sparse_checkout = SparseCheckout::new(path.as_ref())?;
+        let matcher = InvertedGitignore::new(definition.settings.work_tree_alias.clone());
+        let sparse_checkout = SparsityDrafter::new(path.as_ref(), matcher)?;
 
         let cluster = Self {
             repository,
@@ -449,12 +451,14 @@ impl Cluster {
     pub fn try_new_open(path: impl AsRef<Path>) -> Result<Self> {
         debug!("open cluster: {:?}", path.as_ref().display());
         let repository = Repository::open(path.as_ref())?;
-        let mut cluster = Self {
+        let definition = extract_cluster_definition(&repository)?;
+        let matcher = InvertedGitignore::new(definition.settings.work_tree_alias.clone());
+        let sparse_checkout = SparsityDrafter::new(path.as_ref(), matcher)?;
+        let cluster = Self {
             repository,
-            definition: ClusterDefinition::default(),
-            sparse_checkout: SparseCheckout::new(path.as_ref())?,
+            definition,
+            sparse_checkout,
         };
-        cluster.extract_cluster_definition()?;
 
         // INVARIANT: Do not show untracked files.
         let mut config = cluster.repository.config()?;
@@ -535,14 +539,15 @@ impl Cluster {
         // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
         config.set_str("advice.updateSparsePath", "false")?;
 
-        let mut cluster = Self {
-            repository,
-            definition: ClusterDefinition::default(),
-            sparse_checkout: SparseCheckout::new(path.as_ref())?,
-        };
-        cluster.extract_cluster_definition()?;
+        let definition = extract_cluster_definition(&repository)?;
+        let matcher = InvertedGitignore::new(definition.settings.work_tree_alias.clone());
+        let sparse_checkout = SparsityDrafter::new(path.as_ref(), matcher)?;
 
-        Ok(cluster)
+        Ok(Self {
+            repository,
+            definition,
+            sparse_checkout,
+        })
     }
 
     /// Stage and commit content directly into the cluster.
@@ -999,19 +1004,6 @@ impl Cluster {
             .is_ignore()
     }
 
-    fn extract_cluster_definition(&mut self) -> Result<()> {
-        let commit = self.repository.head()?.peel_to_commit()?;
-        let tree = commit.tree()?;
-        let blob = tree
-            .get_name("cluster.toml")
-            .map(|entry| entry.to_object(&self.repository)?.peel_to_blob())
-            .ok_or(anyhow!("cluster has no definition file"))??;
-        let content = String::from_utf8_lossy(blob.content()).into_owned();
-        self.definition = toml::de::from_str::<ClusterDefinition>(&content)?;
-
-        Ok(())
-    }
-
     fn expand_bin_args(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -1089,193 +1081,6 @@ impl fmt::Debug for Cluster {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "located at {:?}", self.path().display())?;
         writeln!(f, "definition {:#?}", self.definition)
-    }
-}
-
-/// Sparse checkout configuration file manager.
-///
-/// Manage the sparsity rules contained inside of a cluster's sparse checkout
-/// configuration file.
-///
-/// # Why Sparse Checkout?
-///
-/// Git comes with a cool feature called "sparse checkout". It allows the user
-/// to reduce their work tree to a subset of tracked files. What gets included
-/// in this reduced work tree is determined by a set of __sparsity rules__.
-/// A sparsity rule is just a pattern of characters that match tracked files
-/// for inclusion into the reduced work tree. The formatting of these rules
-/// use the same format as gitignore rules, but instead of trying to _ignore_
-/// files, they are trying to _include_ them.
-///
-/// Sparse checkout operates in one of two modes: cone or non-cone mode. These
-/// operation modes simply reduce the allowable set of sparsity rule patterns
-/// that can be used. Cone mode only allows for usage of sparsity rule patterns
-/// that include directories. Non-cone mode allows usage of the _entire_
-/// sparsity rule pattern set. By default Git uses cone mode.
-///
-/// Oxidot employs sparse checkout as the backbone of the file deployment
-/// feature provided by clusters. When using sparse checkout with bare-alias
-/// repositories, file content can be directly deployed to a work tree alias
-/// without needing to manually symlink, copy, or move it. This also has the
-/// added benefit of allowing Git itself to keep track of these deployed files
-/// without needing to modify the commit history of any given cluster in the
-/// cluster store.
-///
-/// # Pitfalls
-///
-/// By default oxidot uses cone mode for sparse checkout. We prefer to give
-/// the user full access to the sparsity rule pattern set to make it easier
-/// to deploy any component of a cluster. However, cone mode is deprecated for
-/// new releases of Git. Cone mode will not be removed from Git, but the
-/// implementors of sparse checkout highly recommend to use non-cone mode
-/// instead.
-///
-/// The main problem with cone mode is its runtime of O(N*M) where N is number
-/// of sparsity rules to check, and M is the number of paths to check against.
-/// Oxidot generally expects to avoid this issue through the modular setup
-/// of clusters, where the runtime is split across multiple bare-alias
-/// repositories.
-///
-/// # See Also
-///
-/// - [Man page sparse checkout](https://git-scm.com/docs/git-sparse-checkout)
-/// - [`Cluster`](struct.Cluster)
-#[derive(Clone, Debug)]
-pub struct SparseCheckout {
-    sparse_path: PathBuf,
-}
-
-impl SparseCheckout {
-    /// Construct new sparse checkout configuration file manager.
-    ///
-    /// Determines path to sparse checkout configuration file relative to
-    /// path to gitdir. Creates the sparse checkout configuration file if it
-    /// does not already exist.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if sparse checkout configuration file cannot be created.
-    pub fn new(gitdir: impl Into<PathBuf>) -> Result<Self> {
-        let sparse_path = gitdir.into().join("info").join("sparse-checkout");
-
-        // INVARIANT: Create sparse checkout file if needed.
-        OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&sparse_path)
-            .with_context(|| anyhow!("failed to create {:?}", sparse_path.display()))?;
-
-        Ok(Self { sparse_path })
-    }
-
-    /// Insert a list of sparsity rules to configuration file.
-    ///
-    /// Takes list of new sparsity rules and writes them directly into the
-    /// sparse checkout configuration file. Any existing sparsity rules within
-    /// the configuration file will be preserved, i.e., the new rules will be
-    /// appended to the older rules. If there are duplicate sparsity rules, they
-    /// will be deduplicated ensuring that each rule in the configuration is
-    /// unique.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if sparse checkout configuration file cannot be opened, read,
-    /// or written to for whatever reason.
-    pub fn insert_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        let mut rule_set = read_to_string(&self.sparse_path)
-            .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
-
-        // INVARIANT: Append new rules to existing rule set.
-        let new_rules: Vec<String> = rules.into_iter().map(|r| r.into()).collect();
-        for rule in new_rules {
-            writeln!(&mut rule_set, "{}", rule).unwrap();
-        }
-
-        // INVARIANT: Deduplicate rule set and make sure each rule is on its own line.
-        let mut seen = HashSet::new();
-        let rule_set = rule_set
-            .lines()
-            .filter(|line| seen.insert(*line))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // INVARIANT: Append trailing newline to end of rule set.
-        let rule_set = if rule_set.is_empty() {
-            rule_set
-        } else {
-            format!("{}\n", rule_set)
-        };
-
-        write(&self.sparse_path, rule_set.as_bytes()).with_context(|| {
-            anyhow!(
-                "failed to write sparsity rules to {:?}",
-                self.sparse_path.display()
-            )
-        })?;
-
-        Ok(())
-    }
-
-    /// Remove matching rules from sparse checkout configuration file.
-    ///
-    /// Takes list of rules and removes them from the sparse checkout
-    /// configuration file if they exist. Any existing rules that do not match
-    /// the list will be preserved.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if sparse checkout configuration file cannot be opened, read,
-    /// or written to for whatever reason.
-    pub fn remove_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        let content = read_to_string(&self.sparse_path)
-            .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
-
-        let old_rules: HashSet<String> = rules.into_iter().map(|rule| rule.into()).collect();
-        let filtered: Vec<&str> = content
-            .lines()
-            .filter(|line| !old_rules.contains(*line))
-            .collect();
-
-        // INVARIANT: Append trailing newline to end of rule set.
-        let result = if filtered.is_empty() {
-            String::new()
-        } else {
-            format!("{}\n", filtered.join("\n"))
-        };
-
-        write(&self.sparse_path, result.as_bytes()).with_context(|| {
-            anyhow!("failed to remove rules in {:?}", self.sparse_path.display())
-        })?;
-
-        Ok(())
-    }
-
-    /// Get listing of all current sparsity rules.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if sparse checkout configuration file cannot be opened or
-    /// read.
-    pub fn current_rules(&self) -> Result<Vec<String>> {
-        let content = read_to_string(&self.sparse_path)
-            .with_context(|| anyhow!("failed to read {:?}", self.sparse_path.display()))?;
-
-        Ok(content.lines().map(String::from).collect())
-    }
-
-    /// Clear all rules from sparse checkout configuration file.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if sparse checkout configuration file cannot be opened, read,
-    /// or written to for whatever reason.
-    pub fn clear_rules(&self) -> Result<()> {
-        write(&self.sparse_path, b"").with_context(|| {
-            anyhow!("failed to clear rules in {:?}", self.sparse_path.display())
-        })?;
-
-        Ok(())
     }
 }
 
@@ -1386,6 +1191,19 @@ fn syscall_interactive(
     }
 
     Ok(())
+}
+
+fn extract_cluster_definition(repository: &Repository) -> Result<ClusterDefinition> {
+    let commit = repository.head()?.peel_to_commit()?;
+    let tree = commit.tree()?;
+    let blob = tree
+        .get_name("cluster.toml")
+        .map(|entry| entry.to_object(repository)?.peel_to_blob())
+        .ok_or(anyhow!("cluster has no definition file"))??;
+    let content = String::from_utf8_lossy(blob.content()).into_owned();
+    content
+        .parse()
+        .with_context(|| anyhow!("failed to extract cluster"))
 }
 
 // Thanks from:
