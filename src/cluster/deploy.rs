@@ -74,10 +74,36 @@ pub struct Git2Deployer {
 }
 
 impl Git2Deployer {
-    pub fn new(repository: Repository, sparsity: SparsityDrafter<InvertedGitignore>) -> Self {
-        Self {
+    pub fn new(repository: Repository, sparsity: SparsityDrafter<InvertedGitignore>) -> Result<Self> {
+        let deployer = Self {
             repository,
             sparsity,
+        };
+
+        // INVARIANT: Do not show untracked files.
+        let mut config = deployer.repository.config()?;
+        if deployer.get_config_value(&config, "status.showUntrackedFiles")? != Some("no".into()) {
+            config.set_str("status.showUntrackedFiles", "no")?;
+        }
+
+        // INVARIANT: Always enable sparse checkout.
+        if deployer.get_config_value(&config, "core.sparseCheckout")? != Some("true".into()) {
+            config.set_str("core.sparseCheckout", "true")?;
+        }
+
+        // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
+        if deployer.get_config_value(&config, "advice.updateSparsePath")? != Some("true".into()) {
+            config.set_str("advice.updateSparsePath", "false")?;
+        }
+
+        Ok(deployer)
+    }
+
+    fn get_config_value(&self, config: &git2::Config, key: &str) -> Result<Option<String>> {
+        match config.get_entry(key) {
+            Ok(entry) => Ok(entry.value().map(|v| v.to_string())),
+            Err(err) if err.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(err) => Err(DeployError::Git2(err)),
         }
     }
 
