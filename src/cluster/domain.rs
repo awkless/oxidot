@@ -64,7 +64,7 @@ use crate::{
     config::ClusterDefinition,
 };
 
-use std::ffi::OsString;
+use std::{ffi::OsString, path::Path};
 
 /// A basic cluster.
 ///
@@ -165,6 +165,29 @@ where
             .gitcall_non_interactive(&self.definition.settings.work_tree_alias, args)?)
     }
 }
+
+pub trait ClusterAccess {
+    fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster>;
+    fn try_open(path: impl AsRef<Path>) -> Result<Cluster>;
+    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>) -> Result<Cluster>;
+}
+
+pub struct Git2Cluster;
+
+impl ClusterAccess for Git2Cluster {
+    fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster> {
+        todo!();
+    }
+
+    fn try_open(path: impl AsRef<Path>) -> Result<Cluster> {
+        todo!();
+    }
+
+    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>) -> Result<Cluster> {
+        todo!();
+    }
+}
+
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClusterError {
