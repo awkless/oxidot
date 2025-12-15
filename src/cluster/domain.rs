@@ -184,18 +184,9 @@ impl ClusterAccess for Git2Cluster {
     fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster> {
         info!("initialize new cluster: {:?}", path.as_ref().display());
         let repository = Repository::init_bare(path.as_ref())?;
-
-        let mut config = repository.config()?;
-        // INVARIANT: Do not show untracked files.
-        config.set_str("status.showUntrackedFiles", "no")?;
-        // INVARIANT: Always enable sparse checkout.
-        config.set_str("core.sparseCheckout", "true")?;
-        // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
-        config.set_str("advice.updateSparsePath", "false")?;
-
         let matcher = InvertedGitignore::new();
         let sparsity = SparsityDrafter::new(path.as_ref(), matcher)?;
-        let deployer = Git2Deployer::new(repository, sparsity);
+        let deployer = Git2Deployer::new(repository, sparsity)?;
 
         let cluster = Cluster {
             definition,
@@ -214,8 +205,16 @@ impl ClusterAccess for Git2Cluster {
         Ok(cluster)
     }
 
+    #[instrument(skip(path), level = "debug")]
     fn try_open(path: impl AsRef<Path>) -> Result<Cluster> {
-        todo!();
+        debug!("open cluster: {:?}", path.as_ref().display());
+        let repository = Repository::open(path.as_ref())?;
+        let matcher = InvertedGitignore::new();
+        let sparsity = SparsityDrafter::new(path.as_ref(), matcher)?;
+        let deployer = Git2Deployer::new(repository, sparsity)?;
+        let definition = deployer.cat_file("cluster.toml")?.parse()?;
+
+        Ok(Cluster { definition, deployer })
     }
 
     fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>) -> Result<Cluster> {
@@ -231,6 +230,9 @@ pub enum ClusterError {
 
     #[error(transparent)]
     Sparse(#[from] crate::cluster::sparse::SparseError),
+
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
 
     #[error(transparent)]
     Git2(#[from] git2::Error),
