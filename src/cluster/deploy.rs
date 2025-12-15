@@ -17,6 +17,7 @@ use crate::{
 
 use git2::{ObjectType, Blob, Repository};
 use std::{
+    fmt::{Debug, Formatter, Result as FmtResult},
     ffi::{OsStr, OsString},
     path::{PathBuf, Path},
     process::Command,
@@ -221,6 +222,12 @@ impl Git2Deployer {
         }
 
         Ok(())
+    }
+}
+
+impl Debug for Git2Deployer {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        writeln!(f, "gitdir: {:?}", self.repository.path().display())
     }
 }
 
