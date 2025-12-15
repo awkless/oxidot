@@ -18,9 +18,11 @@ use crate::{
 use git2::Repository;
 use std::{
     ffi::{OsStr, OsString},
-    path::Path,
+    path::{PathBuf, Path},
     process::Command,
+    collections::HashSet,
 };
+use tracing::{debug, info, instrument, warn};
 
 pub trait Deployment {
     fn cat_file(&self, path: &Path) -> Result<String>;
@@ -68,6 +70,85 @@ impl Git2Deployer {
             sparsity,
         }
     }
+
+    fn expand_bin_args(
+        &self,
+        work_tree_alias: &WorkTreeAlias,
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Vec<OsString> {
+        let gitdir = self.repository.path().to_string_lossy().into_owned().into();
+        let path_args: Vec<OsString> = vec![
+            "--git-dir".into(),
+            gitdir,
+            "--work-tree".into(),
+            work_tree_alias.to_os_string(),
+        ];
+
+        let mut user_args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+        if self.should_add_sparse_flag(&user_args) {
+            user_args.splice(1..1, ["--sparse".into()]);
+        }
+
+        let mut bin_args: Vec<OsString> = Vec::new();
+        bin_args.extend(path_args);
+        bin_args.extend(user_args);
+
+        bin_args
+    }
+
+    fn should_add_sparse_flag(&self, args: &[OsString]) -> bool {
+        if args.is_empty() {
+            return false;
+        }
+
+        let subcommand = args[0].to_string_lossy();
+        matches!(subcommand.as_ref(), "add" | "rm" | "mv")
+    }
+
+    fn get_staged_paths(&self) -> Result<HashSet<PathBuf>> {
+        let index = self.repository.index()?;
+        let mut paths = HashSet::new();
+
+        for entry in index.iter() {
+            if let Ok(path_str) = std::str::from_utf8(&entry.path) {
+                paths.insert(PathBuf::from(path_str));
+            }
+        }
+
+        Ok(paths)
+    }
+
+    #[instrument(skip(self, new_files), level = "debug")]
+    fn sync_sparse_with_new_files(
+        &self,
+        work_tree_alias: &WorkTreeAlias,
+        new_files: &[PathBuf]
+    ) -> Result<()> {
+        let mut new_rules = Vec::new();
+        for path in new_files {
+            let full_path = work_tree_alias.as_path().join(path);
+
+            debug!(
+                "checking if {} matches existing sparse rules",
+                path.display()
+            );
+
+            if !self.sparsity.path_matches(work_tree_alias, &full_path) {
+                debug!("adding new sparse rule for {}", path.display());
+                new_rules.push(path.display().to_string());
+            } else {
+                debug!("{} already covered by existing rules", path.display());
+            }
+        }
+
+        if !new_rules.is_empty() {
+            info!("adding {} new sparse rules", new_rules.len());
+            self.sparsity.insert_rules(&new_rules)?;
+            syscall_non_interactive("git", self.expand_bin_args(work_tree_alias, ["checkout"]))?;
+        }
+
+        Ok(())
+    }
 }
 
 impl Deployment for Git2Deployer {
@@ -108,7 +189,17 @@ impl Deployment for Git2Deployer {
         work_tree_alias: &WorkTreeAlias,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Result<()> {
-        todo!();
+        let index_before = self.get_staged_paths()?;
+        syscall_interactive("git", self.expand_bin_args(work_tree_alias, args))?;
+        let index_after = self.get_staged_paths()?;
+
+        // INVARIANT: Sync sparsity rules with index if and only if the index itself has changed.
+        let newly_added: Vec<PathBuf> = index_after.difference(&index_before).cloned().collect();
+        if !newly_added.is_empty() {
+            self.sync_sparse_with_new_files(work_tree_alias, &newly_added)?;
+        }
+
+        Ok(())
     }
 
     fn gitcall_non_interactive(
@@ -116,9 +207,13 @@ impl Deployment for Git2Deployer {
         work_tree_alias: &WorkTreeAlias,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Result<String> {
-        todo!();
+        syscall_non_interactive(
+            "git",
+            self.expand_bin_args(work_tree_alias, args),
+        )
     }
 }
+
 
 fn syscall_interactive(
     cmd: impl AsRef<OsStr>,
@@ -171,6 +266,12 @@ fn syscall_non_interactive(
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeployError {
+    #[error(transparent)]
+    Sparse(#[from] crate::cluster::sparse::SparseError),
+
+    #[error(transparent)]
+    Git2(#[from] git2::Error),
+
     #[error(transparent)]
     Syscall(#[from] std::io::Error),
 }
