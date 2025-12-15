@@ -60,9 +60,11 @@
 //! 3. [`sparse`](crate::cluster::sparse)
 
 use crate::{
-    cluster::sparse::{InvertedGitignore, SparsityDrafter},
+    cluster::deploy::{Deployment, Git2Deployer},
     config::ClusterDefinition,
 };
+
+use std::ffi::OsString;
 
 /// A basic cluster.
 ///
@@ -72,20 +74,102 @@ use crate::{
 /// needing to initialize it as a Git repository. Tracked files can be deployed
 /// or undeployed to the work tree alias at will.
 #[derive(Debug)]
-pub struct Cluster {
+pub struct Cluster<D = Git2Deployer>
+where
+    D: Deployment,
+{
     pub(crate) definition: ClusterDefinition,
-    pub(crate) sparsity: SparsityDrafter<InvertedGitignore>,
+    deployer: D,
 }
 
-impl Cluster {
+impl<D> Cluster<D>
+where
+    D: Deployment,
+{
     /// Construct new cluster.
-    pub fn new(
-        definition: ClusterDefinition,
-        sparsity: SparsityDrafter<InvertedGitignore>,
-    ) -> Self {
+    pub fn new(definition: ClusterDefinition, deployer: D) -> Self {
         Self {
             definition,
-            sparsity,
+            deployer,
         }
     }
+
+    pub fn deploy_with_rules(
+        &self,
+        rules: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<()> {
+        Ok(self
+            .deployer
+            .deploy_with_rules(&self.definition.settings.work_tree_alias, rules)?)
+    }
+
+    pub fn undeploy_with_rules(
+        &self,
+        rules: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<()> {
+        Ok(self
+            .deployer
+            .undeploy_with_rules(&self.definition.settings.work_tree_alias, rules)?)
+    }
+
+    pub fn deploy_default_rules(&self) -> Result<()> {
+        if let Some(default) = &self.definition.settings.include {
+            self.deployer
+                .deploy_with_rules(&self.definition.settings.work_tree_alias, default)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn undeploy_default_rules(&self) -> Result<()> {
+        if let Some(default) = &self.definition.settings.include {
+            self.deployer
+                .undeploy_with_rules(&self.definition.settings.work_tree_alias, default)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn deploy_all(&self) -> Result<()> {
+        Ok(self
+            .deployer
+            .deploy_all(&self.definition.settings.work_tree_alias)?)
+    }
+
+    pub fn undeploy_all(&self) -> Result<()> {
+        Ok(self
+            .deployer
+            .undeploy_all(&self.definition.settings.work_tree_alias)?)
+    }
+
+    pub fn is_deployed(&self) -> bool {
+        self.deployer
+            .is_deployed(&self.definition.settings.work_tree_alias)
+    }
+
+    pub fn gitcall_interactive(
+        &self,
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Result<()> {
+        Ok(self
+            .deployer
+            .gitcall_interactive(&self.definition.settings.work_tree_alias, args)?)
+    }
+
+    pub fn gitcall_non_interactive(
+        &self,
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Result<String> {
+        Ok(self
+            .deployer
+            .gitcall_non_interactive(&self.definition.settings.work_tree_alias, args)?)
+    }
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClusterError {
+    #[error(transparent)]
+    Deployment(#[from] crate::cluster::deploy::DeployError),
+}
+
+type Result<T, E = ClusterError> = std::result::Result<T, E>;

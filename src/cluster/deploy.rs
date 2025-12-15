@@ -15,17 +15,19 @@ use crate::{
     config::WorkTreeAlias,
 };
 
-use git2::{ObjectType, Blob, Repository};
+use git2::{Blob, ObjectType, Repository};
 use std::{
-    fmt::{Debug, Formatter, Result as FmtResult},
+    collections::{HashSet, VecDeque},
     ffi::{OsStr, OsString},
-    path::{PathBuf, Path},
+    fmt::{Debug, Formatter, Result as FmtResult},
+    path::{Path, PathBuf},
     process::Command,
-    collections::{VecDeque, HashSet},
 };
 use tracing::{debug, info, instrument, warn};
 
 pub trait Deployment {
+    fn is_empty(&self) -> bool;
+
     fn cat_file(&self, path: impl AsRef<Path>) -> Result<String>;
 
     fn deploy_with_rules(
@@ -72,15 +74,6 @@ impl Git2Deployer {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.repository
-            .head()
-            .ok()
-            .and_then(|head| head.target())
-            .and_then(|oid| self.repository.find_commit(oid).ok())
-            .is_none()
-    }
-
     fn find_blob(&self, path: impl AsRef<Path>) -> Result<Blob<'_>> {
         let mut entries = Vec::new();
         let commit = self.repository.head()?.peel_to_commit()?;
@@ -111,7 +104,9 @@ impl Git2Deployer {
             }
         }
 
-        Err(DeployError::BlobNotFound { path: path.as_ref().into() })
+        Err(DeployError::BlobNotFound {
+            path: path.as_ref().into(),
+        })
     }
 
     // Thank you Eric at https://www.hydrogen18.com/blog/list-all-files-git-repo-pygit2.html.
@@ -196,7 +191,7 @@ impl Git2Deployer {
     fn sync_sparse_with_new_files(
         &self,
         work_tree_alias: &WorkTreeAlias,
-        new_files: &[PathBuf]
+        new_files: &[PathBuf],
     ) -> Result<()> {
         let mut new_rules = Vec::new();
         for path in new_files {
@@ -236,6 +231,15 @@ impl Deployment for Git2Deployer {
         let blob = self.find_blob(path.as_ref())?;
 
         Ok(String::from_utf8_lossy(blob.content()).into_owned())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.repository
+            .head()
+            .ok()
+            .and_then(|head| head.target())
+            .and_then(|oid| self.repository.find_commit(oid).ok())
+            .is_none()
     }
 
     #[instrument(skip(self, work_tree_alias, rules), level = "debug")]
@@ -361,13 +365,9 @@ impl Deployment for Git2Deployer {
         work_tree_alias: &WorkTreeAlias,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Result<String> {
-        syscall_non_interactive(
-            "git",
-            self.expand_bin_args(work_tree_alias, args),
-        )
+        syscall_non_interactive("git", self.expand_bin_args(work_tree_alias, args))
     }
 }
-
 
 fn syscall_interactive(
     cmd: impl AsRef<OsStr>,
