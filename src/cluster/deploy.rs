@@ -71,6 +71,15 @@ impl Git2Deployer {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.repository
+            .head()
+            .ok()
+            .and_then(|head| head.target())
+            .and_then(|oid| self.repository.find_commit(oid).ok())
+            .is_none()
+    }
+
     fn expand_bin_args(
         &self,
         work_tree_alias: &WorkTreeAlias,
@@ -172,8 +181,20 @@ impl Deployment for Git2Deployer {
         todo!();
     }
 
+    #[instrument(skip(self), level = "debug")]
     fn deploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()> {
-        todo!();
+        info!("deploy all of {:?}", self.repository.path().display());
+        if self.is_empty() {
+            warn!("cluster {:?} is empty", self.repository.path().display());
+            return Ok(());
+        }
+
+        self.sparsity.clear_rules()?;
+        self.sparsity.insert_rules(["/*"])?;
+        let output = self.gitcall_non_interactive(work_tree_alias, ["checkout"])?;
+        info!("{output}");
+
+        Ok(())
     }
 
     fn undeploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()> {
