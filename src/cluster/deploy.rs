@@ -196,14 +196,6 @@ impl Deployment for Git2Deployer {
         todo!();
     }
 
-    fn undeploy_with_rules(
-        &self,
-        work_tree_alias: &WorkTreeAlias,
-        rules: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Result<()> {
-        todo!();
-    }
-
     #[instrument(skip(self, work_tree_alias, rules), level = "debug")]
     fn deploy_with_rules(
         &self,
@@ -217,6 +209,25 @@ impl Deployment for Git2Deployer {
         }
 
         self.sparsity.insert_rules(rules)?;
+        let output = self.gitcall_non_interactive(work_tree_alias, ["checkout"])?;
+        info!("{output}");
+
+        Ok(())
+    }
+
+    #[instrument(skip(self, work_tree_alias, rules), level = "debug")]
+    fn undeploy_with_rules(
+        &self,
+        work_tree_alias: &WorkTreeAlias,
+        rules: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<()> {
+        info!("undeploy {:?}", self.repository.path().display());
+        if self.is_empty() {
+            warn!("cluster {:?} is empty", self.repository.path().display());
+            return Ok(());
+        }
+
+        self.sparsity.remove_rules(rules)?;
         let output = self.gitcall_non_interactive(work_tree_alias, ["checkout"])?;
         info!("{output}");
 
