@@ -60,11 +60,16 @@
 //! 3. [`sparse`](crate::cluster::sparse)
 
 use crate::{
-    cluster::deploy::{Deployment, Git2Deployer},
+    cluster::{
+        deploy::{Deployment, Git2Deployer},
+        sparse::{InvertedGitignore, SparsityDrafter},
+    },
     config::ClusterDefinition,
 };
 
 use std::{ffi::OsString, path::Path};
+use tracing::{debug, info, instrument, warn};
+use git2::Repository;
 
 /// A basic cluster.
 ///
@@ -79,7 +84,7 @@ where
     D: Deployment,
 {
     pub(crate) definition: ClusterDefinition,
-    deployer: D,
+    pub(crate) deployer: D,
 }
 
 impl<D> Cluster<D>
@@ -175,8 +180,38 @@ pub trait ClusterAccess {
 pub struct Git2Cluster;
 
 impl ClusterAccess for Git2Cluster {
+    #[instrument(skip(path, definition), level = "debug")]
     fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster> {
-        todo!();
+        info!("initialize new cluster: {:?}", path.as_ref().display());
+        let repository = Repository::init_bare(path.as_ref())?;
+
+        let mut config = repository.config()?;
+        // INVARIANT: Do not show untracked files.
+        config.set_str("status.showUntrackedFiles", "no")?;
+        // INVARIANT: Always enable sparse checkout.
+        config.set_str("core.sparseCheckout", "true")?;
+        // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
+        config.set_str("advice.updateSparsePath", "false")?;
+
+        let matcher = InvertedGitignore::new();
+        let sparsity = SparsityDrafter::new(path.as_ref(), matcher)?;
+        let deployer = Git2Deployer::new(repository, sparsity);
+
+        let cluster = Cluster {
+            definition,
+            deployer,
+        };
+
+        let contents = &cluster.definition.to_string();
+        info!(
+            "stage and commit the following cluster definition:\n{}",
+            contents
+        );
+
+        cluster.deployer.stage_and_commit("cluster.toml", contents, "chore: add cluster.toml")?;
+        cluster.gitcall_non_interactive(["checkout"])?;
+
+        Ok(cluster)
     }
 
     fn try_open(path: impl AsRef<Path>) -> Result<Cluster> {
@@ -193,6 +228,12 @@ impl ClusterAccess for Git2Cluster {
 pub enum ClusterError {
     #[error(transparent)]
     Deployment(#[from] crate::cluster::deploy::DeployError),
+
+    #[error(transparent)]
+    Sparse(#[from] crate::cluster::sparse::SparseError),
+
+    #[error(transparent)]
+    Git2(#[from] git2::Error),
 }
 
 type Result<T, E = ClusterError> = std::result::Result<T, E>;
