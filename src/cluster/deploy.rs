@@ -15,12 +15,12 @@ use crate::{
     config::WorkTreeAlias,
 };
 
-use git2::Repository;
+use git2::{ObjectType, Repository};
 use std::{
     ffi::{OsStr, OsString},
     path::{PathBuf, Path},
     process::Command,
-    collections::HashSet,
+    collections::{VecDeque, HashSet},
 };
 use tracing::{debug, info, instrument, warn};
 
@@ -71,13 +71,44 @@ impl Git2Deployer {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.repository
             .head()
             .ok()
             .and_then(|head| head.target())
             .and_then(|oid| self.repository.find_commit(oid).ok())
             .is_none()
+    }
+
+    // Thank you Eric at https://www.hydrogen18.com/blog/list-all-files-git-repo-pygit2.html.
+    fn list_file_paths(&self) -> Result<Vec<PathBuf>> {
+        let mut entries = Vec::new();
+        let commit = self.repository.head()?.peel_to_commit()?;
+        let tree = commit.tree()?;
+        let mut trees_and_paths = VecDeque::new();
+        trees_and_paths.push_front((tree, PathBuf::new()));
+
+        // Use DFS to traverse index tree.
+        while let Some((tree, path)) = trees_and_paths.pop_front() {
+            for tree_entry in &tree {
+                match tree_entry.kind() {
+                    // INVARIANT: Hit a tree? Traverse it!
+                    Some(ObjectType::Tree) => {
+                        let next_tree = self.repository.find_tree(tree_entry.id())?;
+                        let next_path = path.join(bytes_to_path(tree_entry.name_bytes()));
+                        trees_and_paths.push_front((next_tree, next_path));
+                    }
+                    // INVARIANT: Hit a blob? Record our current path!
+                    Some(ObjectType::Blob) => {
+                        let full_path = path.join(bytes_to_path(tree_entry.name_bytes()));
+                        entries.push(full_path);
+                    }
+                    _ => continue,
+                }
+            }
+        }
+
+        Ok(entries)
     }
 
     fn expand_bin_args(
@@ -215,7 +246,32 @@ impl Deployment for Git2Deployer {
     }
 
     fn is_deployed(&self, work_tree_alias: &WorkTreeAlias) -> bool {
-        todo!();
+        if self.is_empty() {
+            return false;
+        }
+
+        let rules = match self.sparsity.current_rules() {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+
+        if rules.is_empty() {
+            return false;
+        }
+
+        let entries = match self.list_file_paths() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+
+        for entry in entries {
+            let full_path = work_tree_alias.as_path().join(&entry);
+            if full_path.exists() && self.sparsity.path_matches(work_tree_alias, &full_path) {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn gitcall_interactive(
@@ -296,6 +352,21 @@ fn syscall_non_interactive(
     }
 
     Ok(message)
+}
+
+// Thanks from:
+//
+// https://github.com/rust-lang/git2-rs/blob/5bc3baa9694a94db2ca9cc256b5bce8a215f9013/
+// src/util.rs#L85
+#[cfg(unix)]
+fn bytes_to_path(bytes: &[u8]) -> &Path {
+    use std::os::unix::prelude::*;
+    Path::new(OsStr::from_bytes(bytes))
+}
+#[cfg(windows)]
+fn bytes_to_path(byts: &[u8]) -> PathBuf {
+    use std::str;
+    Path::new(str::from_utf8(bytes).unwrap())
 }
 
 #[derive(Debug, thiserror::Error)]
