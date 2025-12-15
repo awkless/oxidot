@@ -15,7 +15,7 @@ use crate::{
     config::WorkTreeAlias,
 };
 
-use git2::{Blob, ObjectType, Repository};
+use git2::{Blob, ObjectType, Repository, IndexTime, IndexEntry};
 use std::{
     collections::{HashSet, VecDeque},
     ffi::{OsStr, OsString},
@@ -29,6 +29,13 @@ pub trait Deployment {
     fn is_empty(&self) -> bool;
 
     fn cat_file(&self, path: impl AsRef<Path>) -> Result<String>;
+
+    fn stage_and_commit(
+        &self,
+        filename: impl AsRef<Path>,
+        contents: impl AsRef<str>,
+        message: impl AsRef<str>,
+    ) -> Result<()>;
 
     fn deploy_with_rules(
         &self,
@@ -231,6 +238,65 @@ impl Deployment for Git2Deployer {
         let blob = self.find_blob(path.as_ref())?;
 
         Ok(String::from_utf8_lossy(blob.content()).into_owned())
+    }
+
+    fn stage_and_commit(
+        &self,
+        filename: impl AsRef<Path>,
+        contents: impl AsRef<str>,
+        message: impl AsRef<str>,
+    ) -> Result<()> {
+        let entry = IndexEntry {
+            ctime: IndexTime::new(0, 0),
+            mtime: IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: contents.as_ref().len() as u32,
+            id: self.repository.blob(contents.as_ref().as_bytes())?,
+            flags: 0,
+            flags_extended: 0,
+            path: filename
+                .as_ref()
+                .as_os_str()
+                .to_string_lossy()
+                .into_owned()
+                .as_bytes()
+                .to_vec(),
+        };
+
+        // INVARIANT: Always use new tree produced by index after staging new entry.
+        let mut index = self.repository.index()?;
+        index.add_frombuffer(&entry, contents.as_ref().as_bytes())?;
+        let tree_oid = index.write_tree()?;
+        let tree = self.repository.find_tree(tree_oid)?;
+
+        // INVARIANT: Always determine latest parent commits to append to.
+        let signature = self.repository.signature()?;
+        let mut parents = Vec::new();
+        if let Some(parent) = self
+            .repository
+            .head()
+            .ok()
+            .map(|head| head.target().unwrap())
+        {
+            parents.push(self.repository.find_commit(parent)?);
+        }
+        let parents = parents.iter().collect::<Vec<_>>();
+
+        // INVARIANT: Commit to HEAD by appending to obtained parent commits.
+        self.repository.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message.as_ref(),
+            &tree,
+            &parents,
+        )?;
+
+        Ok(())
     }
 
     fn is_empty(&self) -> bool {
