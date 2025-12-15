@@ -197,8 +197,21 @@ impl Deployment for Git2Deployer {
         Ok(())
     }
 
+    #[instrument(skip(self), level = "debug")]
     fn undeploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()> {
-        todo!();
+        if !self.is_deployed(work_tree_alias) {
+            warn!(
+                "cluster {:?} already undeployed in full",
+                self.repository.path().display()
+            );
+            return Ok(());
+        }
+
+        self.sparsity.clear_rules()?;
+        let output = self.gitcall_non_interactive(work_tree_alias, ["checkout"])?;
+        info!("{output}");
+
+        Ok(())
     }
 
     fn is_deployed(&self, work_tree_alias: &WorkTreeAlias) -> bool {
