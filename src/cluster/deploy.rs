@@ -15,7 +15,7 @@ use crate::{
     config::WorkTreeAlias,
 };
 
-use git2::{ObjectType, Repository};
+use git2::{ObjectType, Blob, Repository};
 use std::{
     ffi::{OsStr, OsString},
     path::{PathBuf, Path},
@@ -25,7 +25,7 @@ use std::{
 use tracing::{debug, info, instrument, warn};
 
 pub trait Deployment {
-    fn cat_file(&self, path: &Path) -> Result<String>;
+    fn cat_file(&self, path: impl AsRef<Path>) -> Result<String>;
 
     fn deploy_with_rules(
         &self,
@@ -78,6 +78,39 @@ impl Git2Deployer {
             .and_then(|head| head.target())
             .and_then(|oid| self.repository.find_commit(oid).ok())
             .is_none()
+    }
+
+    fn find_blob(&self, path: impl AsRef<Path>) -> Result<Blob<'_>> {
+        let mut entries = Vec::new();
+        let commit = self.repository.head()?.peel_to_commit()?;
+        let tree = commit.tree()?;
+        let mut trees_and_paths = VecDeque::new();
+        trees_and_paths.push_front((tree, PathBuf::new()));
+
+        // Use DFS to traverse index tree.
+        while let Some((tree, path)) = trees_and_paths.pop_front() {
+            for tree_entry in &tree {
+                match tree_entry.kind() {
+                    // INVARIANT: Hit a tree? Traverse it!
+                    Some(ObjectType::Tree) => {
+                        let next_tree = self.repository.find_tree(tree_entry.id())?;
+                        let next_path = path.join(bytes_to_path(tree_entry.name_bytes()));
+                        trees_and_paths.push_front((next_tree, next_path));
+                    }
+                    // INVARIANT: Hit a blob? Check it!
+                    Some(ObjectType::Blob) => {
+                        let full_path = path.join(bytes_to_path(tree_entry.name_bytes()));
+                        if &full_path == &path {
+                            return Ok(tree_entry.to_object(&self.repository)?.peel_to_blob()?);
+                        }
+                        entries.push(full_path);
+                    }
+                    _ => continue,
+                }
+            }
+        }
+
+        Err(DeployError::BlobNotFound { path: path.as_ref().into() })
     }
 
     // Thank you Eric at https://www.hydrogen18.com/blog/list-all-files-git-repo-pygit2.html.
@@ -192,8 +225,10 @@ impl Git2Deployer {
 }
 
 impl Deployment for Git2Deployer {
-    fn cat_file(&self, path: &Path) -> Result<String> {
-        todo!();
+    fn cat_file(&self, path: impl AsRef<Path>) -> Result<String> {
+        let blob = self.find_blob(path.as_ref())?;
+
+        Ok(String::from_utf8_lossy(blob.content()).into_owned())
     }
 
     #[instrument(skip(self, work_tree_alias, rules), level = "debug")]
@@ -395,6 +430,9 @@ fn bytes_to_path(byts: &[u8]) -> PathBuf {
 pub enum DeployError {
     #[error(transparent)]
     Sparse(#[from] crate::cluster::sparse::SparseError),
+
+    #[error("cannot find file blob for {:?}", path.display())]
+    BlobNotFound { path: PathBuf },
 
     #[error(transparent)]
     Git2(#[from] git2::Error),
