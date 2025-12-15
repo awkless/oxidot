@@ -242,9 +242,9 @@ where
         })
     }
 
-    pub fn path_matches(&self, path: impl AsRef<Path>) -> bool {
+    pub fn path_matches(&self, work_tree_alias: &WorkTreeAlias, path: impl AsRef<Path>) -> bool {
         self.matcher
-            .path_matches(path.as_ref(), self.current_rules().unwrap().as_ref())
+            .path_matches(work_tree_alias, path, self.current_rules().unwrap())
     }
 }
 
@@ -255,7 +255,12 @@ pub trait SparsityMatcher {
     /// Match a path to a listing of sparsity rules.
     ///
     /// Compare path to each rule to see if it matches.
-    fn path_matches(&self, path: &Path, rules: &[String]) -> bool;
+    fn path_matches(
+        &self,
+        work_tree_alias: &WorkTreeAlias,
+        path: impl AsRef<Path>,
+        rules: impl IntoIterator<Item = impl Into<String>>,
+    ) -> bool;
 }
 
 /// A sparsity ruler matcher that inverts gitignore semantics.
@@ -266,19 +271,15 @@ pub trait SparsityMatcher {
 ///
 /// > If it looks stupid but it works, then it wasn't stupid.
 /// > - Random Engineer
-#[derive(Debug)]
-pub struct InvertedGitignore {
-    work_tree_alias: WorkTreeAlias,
-}
+#[derive(Debug, Default)]
+pub struct InvertedGitignore;
 
 impl InvertedGitignore {
     /// Construct new inverted gitignore matcher.
     ///
     /// Base pattern matching relative to target work tree alias.
-    pub fn new(work_tree_alias: impl Into<WorkTreeAlias>) -> Self {
-        Self {
-            work_tree_alias: work_tree_alias.into(),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -287,14 +288,19 @@ impl SparsityMatcher for InvertedGitignore {
     ///
     /// Matches files and directories in one shot. Takes longer, but ensures
     /// that any file patttern is checked along with any directory pattern.
-    fn path_matches(&self, path: &Path, rules: &[String]) -> bool {
-        let mut builder = GitignoreBuilder::new(self.work_tree_alias.as_path());
+    fn path_matches(
+        &self,
+        work_tree_alias: &WorkTreeAlias,
+        path: impl AsRef<Path>,
+        rules: impl IntoIterator<Item = impl Into<String>>,
+    ) -> bool {
+        let mut builder = GitignoreBuilder::new(work_tree_alias.as_path());
         // INVARIANT: Invert gitignore logic.
         //   - Ignore everything by default.
         //   - Invert '!' to mean to unignore.
         //   - Invert any rule without '!' to mean ignore.
         builder.add_line(None, "/*").unwrap();
-        for rule in rules {
+        for rule in rules.into_iter().map(Into::into) {
             let is_negated = rule.starts_with('!');
             let pattern = rule.trim_start_matches('!');
             let is_dir = pattern.ends_with('/');
@@ -314,7 +320,7 @@ impl SparsityMatcher for InvertedGitignore {
         let matcher = builder.build().unwrap();
 
         !matcher
-            .matched_path_or_any_parents(path, path.is_dir())
+            .matched_path_or_any_parents(path.as_ref(), path.as_ref().is_dir())
             .is_ignore()
     }
 }

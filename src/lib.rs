@@ -417,7 +417,7 @@ impl Cluster {
         config.set_str("core.sparseCheckout", "true")?;
         // INVARIANT: Allow changes to work tree alias outside of sparsity rules.
         config.set_str("advice.updateSparsePath", "false")?;
-        let matcher = InvertedGitignore::new(definition.settings.work_tree_alias.clone());
+        let matcher = InvertedGitignore::new();
         let sparse_checkout = SparsityDrafter::new(path.as_ref(), matcher)?;
 
         let cluster = Self {
@@ -452,7 +452,7 @@ impl Cluster {
         debug!("open cluster: {:?}", path.as_ref().display());
         let repository = Repository::open(path.as_ref())?;
         let definition = extract_cluster_definition(&repository)?;
-        let matcher = InvertedGitignore::new(definition.settings.work_tree_alias.clone());
+        let matcher = InvertedGitignore::new();
         let sparse_checkout = SparsityDrafter::new(path.as_ref(), matcher)?;
         let cluster = Self {
             repository,
@@ -540,7 +540,7 @@ impl Cluster {
         config.set_str("advice.updateSparsePath", "false")?;
 
         let definition = extract_cluster_definition(&repository)?;
-        let matcher = InvertedGitignore::new(definition.settings.work_tree_alias.clone());
+        let matcher = InvertedGitignore::new();
         let sparse_checkout = SparsityDrafter::new(path.as_ref(), matcher)?;
 
         Ok(Self {
