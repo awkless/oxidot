@@ -67,9 +67,12 @@ use crate::{
     config::ClusterDefinition,
 };
 
-use std::{ffi::OsString, path::Path};
+use auth_git2::{GitAuthenticator, Prompter};
+use git2::{build::RepoBuilder, Config, FetchOptions, RemoteCallbacks, Repository};
+use indicatif::{ProgressBar, ProgressStyle};
+use inquire::{Password, Text};
+use std::{ffi::OsString, path::Path, time};
 use tracing::{debug, info, instrument, warn};
-use git2::Repository;
 
 /// A basic cluster.
 ///
@@ -174,9 +177,11 @@ where
 pub trait ClusterAccess {
     fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster>;
     fn try_open(path: impl AsRef<Path>) -> Result<Cluster>;
-    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>) -> Result<Cluster>;
+    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar)
+        -> Result<Cluster>;
 }
 
+#[derive(Debug)]
 pub struct Git2Cluster;
 
 impl ClusterAccess for Git2Cluster {
@@ -199,7 +204,9 @@ impl ClusterAccess for Git2Cluster {
             contents
         );
 
-        cluster.deployer.stage_and_commit("cluster.toml", contents, "chore: add cluster.toml")?;
+        cluster
+            .deployer
+            .stage_and_commit("cluster.toml", contents, "chore: add cluster.toml")?;
         cluster.gitcall_non_interactive(["checkout"])?;
 
         Ok(cluster)
@@ -214,14 +221,129 @@ impl ClusterAccess for Git2Cluster {
         let deployer = Git2Deployer::new(repository, sparsity)?;
         let definition = deployer.cat_file("cluster.toml")?.parse()?;
 
-        Ok(Cluster { definition, deployer })
+        Ok(Cluster {
+            definition,
+            deployer,
+        })
     }
 
-    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>) -> Result<Cluster> {
-        todo!();
+    fn try_clone(
+        url: impl AsRef<str>,
+        path: impl AsRef<Path>,
+        bar: ProgressBar,
+    ) -> Result<Cluster> {
+        let style = ProgressStyle::with_template(
+            "{elapsed_precise:.green}  {msg:<50}  [{wide_bar:.yellow/blue}]",
+        )?
+        .progress_chars("-Cco.");
+        bar.set_style(style);
+        bar.set_message(url.as_ref().to_string());
+        bar.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let prompter = IndicatifPrompter::new(bar);
+        let authenticator = GitAuthenticator::default().set_prompter(prompter.clone());
+        let config = Config::open_default()?;
+
+        let mut throttle = time::Instant::now();
+        let mut rc = RemoteCallbacks::new();
+        rc.credentials(authenticator.credentials(&config));
+        rc.transfer_progress(|progress| {
+            let stats = progress.to_owned();
+            let bar_size = stats.total_objects() as u64;
+            let bar_pos = stats.received_objects() as u64;
+            if throttle.elapsed() > time::Duration::from_millis(10) {
+                throttle = time::Instant::now();
+                prompter.bar.set_length(bar_size);
+                prompter.bar.set_position(bar_pos);
+            }
+            true
+        });
+
+        let mut fo = FetchOptions::new();
+        fo.remote_callbacks(rc);
+
+        let repository = RepoBuilder::new()
+            .bare(true)
+            .fetch_options(fo)
+            .clone(url.as_ref(), path.as_ref())?;
+
+        let matcher = InvertedGitignore::new();
+        let sparsity = SparsityDrafter::new(path.as_ref(), matcher)?;
+        let deployer = Git2Deployer::new(repository, sparsity)?;
+        let definition = deployer.cat_file("cluster.toml")?.parse()?;
+
+        Ok(Cluster {
+            definition,
+            deployer,
+        })
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct IndicatifPrompter {
+    pub(crate) bar: ProgressBar,
+}
+
+impl IndicatifPrompter {
+    pub fn new(bar: ProgressBar) -> Self {
+        Self { bar }
+    }
+}
+
+impl Prompter for IndicatifPrompter {
+    #[instrument(skip(self, url, _config), level = "debug")]
+    fn prompt_username_password(
+        &mut self,
+        url: &str,
+        _config: &git2::Config,
+    ) -> Option<(String, String)> {
+        info!("authentication required at {url}");
+        self.bar.suspend(|| -> Option<(String, String)> {
+            let username = Text::new("username").prompt().unwrap();
+            let password = Password::new("password")
+                .without_confirmation()
+                .prompt()
+                .unwrap();
+            Some((username, password))
+        })
+    }
+
+    #[instrument(skip(self, username, url, _config), level = "debug")]
+    fn prompt_password(
+        &mut self,
+        username: &str,
+        url: &str,
+        _config: &git2::Config,
+    ) -> Option<String> {
+        info!("authentication required at {url} for user {username}");
+        self.bar.suspend(|| -> Option<String> {
+            let password = Password::new("password")
+                .without_confirmation()
+                .prompt()
+                .unwrap();
+            Some(password)
+        })
+    }
+
+    #[instrument(skip(self, ssh_key_path, _config), level = "debug")]
+    fn prompt_ssh_key_passphrase(
+        &mut self,
+        ssh_key_path: &Path,
+        _config: &git2::Config,
+    ) -> Option<String> {
+        info!(
+            "authentication required with ssh key at {}",
+            ssh_key_path.display()
+        );
+        self.bar.suspend(|| -> Option<String> {
+            let password = Password::new("password")
+                .without_confirmation()
+                .prompt()
+                .unwrap();
+            Some(password)
+        })
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClusterError {
@@ -233,6 +355,9 @@ pub enum ClusterError {
 
     #[error(transparent)]
     Config(#[from] crate::config::ConfigError),
+
+    #[error(transparent)]
+    IndicatifStyleTemplate(#[from] indicatif::style::TemplateError),
 
     #[error(transparent)]
     Git2(#[from] git2::Error),
