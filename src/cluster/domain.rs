@@ -113,7 +113,7 @@ where
 
     pub fn undeploy_with_rules(
         &self,
-        rules: impl IntoIterator<Item = impl Into<String>>,
+        rules: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<()> {
         Ok(self
             .deployer

@@ -46,7 +46,7 @@ pub trait Deployment {
     fn undeploy_with_rules(
         &self,
         work_tree_alias: &WorkTreeAlias,
-        rules: impl IntoIterator<Item = impl Into<String>>,
+        rules: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<()>;
 
     fn deploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()>;
@@ -248,7 +248,8 @@ impl Git2Deployer {
 
         if !new_rules.is_empty() {
             info!("adding {} new sparse rules", new_rules.len());
-            self.sparsity.insert_rules(&new_rules)?;
+            self.sparsity
+                .edit(|editor| editor.insert_rules(&new_rules))?;
             syscall_non_interactive("git", self.expand_bin_args(work_tree_alias, ["checkout"]))?;
         }
 
@@ -349,7 +350,7 @@ impl Deployment for Git2Deployer {
             return Ok(());
         }
 
-        self.sparsity.insert_rules(rules)?;
+        self.sparsity.edit(|editor| editor.insert_rules(rules))?;
         let output = self.gitcall_non_interactive(work_tree_alias, ["checkout"])?;
         info!("{output}");
 
@@ -360,7 +361,7 @@ impl Deployment for Git2Deployer {
     fn undeploy_with_rules(
         &self,
         work_tree_alias: &WorkTreeAlias,
-        rules: impl IntoIterator<Item = impl Into<String>>,
+        rules: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<()> {
         info!("undeploy {:?}", self.repository.path().display());
         if self.is_empty() {
@@ -368,7 +369,7 @@ impl Deployment for Git2Deployer {
             return Ok(());
         }
 
-        self.sparsity.remove_rules(rules)?;
+        self.sparsity.edit(|editor| editor.remove_rules(rules))?;
         let output = self.gitcall_non_interactive(work_tree_alias, ["checkout"])?;
         info!("{output}");
 
@@ -383,8 +384,10 @@ impl Deployment for Git2Deployer {
             return Ok(());
         }
 
-        self.sparsity.clear_rules()?;
-        self.sparsity.insert_rules(["/*"])?;
+        self.sparsity.edit(|editor| {
+            editor.clear_rules();
+            editor.insert_rule("/*");
+        })?;
         let output = self.gitcall_non_interactive(work_tree_alias, ["checkout"])?;
         info!("{output}");
 
@@ -401,7 +404,7 @@ impl Deployment for Git2Deployer {
             return Ok(());
         }
 
-        self.sparsity.clear_rules()?;
+        self.sparsity.edit(|editor| editor.clear_rules())?;
         let output = self.gitcall_non_interactive(work_tree_alias, ["checkout"])?;
         info!("{output}");
 

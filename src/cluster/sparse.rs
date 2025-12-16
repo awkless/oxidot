@@ -68,7 +68,7 @@ use crate::config::WorkTreeAlias;
 use ignore::gitignore::GitignoreBuilder;
 use std::{
     collections::HashSet,
-    fmt::Write,
+    fmt::{Display, Formatter, Result as FmtResult},
     fs::{read_to_string, write, OpenOptions},
     path::{Path, PathBuf},
 };
@@ -119,49 +119,36 @@ where
         })
     }
 
-    /// Insert a set of sparsity rules.
+    /// Edit sparsity rules.
     ///
-    /// Take set of sparsity rules, and append them to existing rule set in
-    /// configuration file. Will not overwrite existing sparsity rules. Ensures
-    /// that each newly added rule is on its own separate line. Any duplicate
-    /// rules will be removed, ensuring that all rules in the sparse
-    /// configuration file are unique.
+    /// Read current rule set into [`SparsityEdit`] instance, and directly
+    /// edit each rule before writing the results back into the sparse checkout
+    /// configuration file.
     ///
     /// # Errors
     ///
-    /// - Return [`SparseError::ReadSparseFile`] if configuration file cannot
-    ///   be read from.
-    /// - Return [`SparseError::WriteSparseFile`] if configuration file cannot
-    ///   be written to.
-    pub fn insert_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        let mut rule_set =
+    /// - Return [`SparseError::ReadSparseFile`] if sparse checkout
+    ///   configuration file cannot be read.
+    /// - Return [`SparseError::WriteSparseFile`] if rules cannot be written to
+    ///   sparse checkout configuration file.
+    pub fn edit<E>(&self, editor: E) -> Result<()>
+    where
+        E: FnOnce(&mut SparsityEdit),
+    {
+        let content =
             read_to_string(&self.sparse_path).map_err(|err| SparseError::ReadSparseFile {
                 source: err,
                 sparse_path: self.sparse_path.clone(),
             })?;
 
-        // INVARIANT: Append new rules to existing rule set.
-        let new_rules: Vec<String> = rules.into_iter().map(|r| r.into()).collect();
-        for rule in new_rules {
-            writeln!(&mut rule_set, "{}", rule).unwrap();
+        let mut rules = SparsityEdit::from(content);
+        editor(&mut rules);
+
+        if !rules.changed {
+            return Ok(());
         }
 
-        // INVARIANT: Deduplicate rule set and make sure each rule is on its own line.
-        let mut seen = HashSet::new();
-        let rule_set = rule_set
-            .lines()
-            .filter(|line| seen.insert(*line))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // INVARIANT: Append trailing newline to end of rule set.
-        let rule_set = if rule_set.is_empty() {
-            rule_set
-        } else {
-            format!("{}\n", rule_set)
-        };
-
-        write(&self.sparse_path, rule_set.as_bytes()).map_err(|err| {
+        write(&self.sparse_path, rules.to_string().as_bytes()).map_err(|err| {
             SparseError::WriteSparseFile {
                 source: err,
                 sparse_path: self.sparse_path.clone(),
@@ -171,87 +158,137 @@ where
         Ok(())
     }
 
-    /// Remove a set of sparsity rules.
-    ///
-    /// Finds sparsity rules that need to be removed from configuration file
-    /// based on provided removal list. Rules that do not match will be left
-    /// alone.
+    /// List current sparsity rule set.
     ///
     /// # Errors
     ///
-    /// - Return [`SparseError::ReadSparseFile`] if configuration file cannot
-    ///   be read from.
-    /// - Return [`SparseError::WriteSparseFile`] if configuration file cannot
-    ///   be written to.
-    pub fn remove_rules(&self, rules: impl IntoIterator<Item = impl Into<String>>) -> Result<()> {
-        let content =
-            read_to_string(&self.sparse_path).map_err(|err| SparseError::ReadSparseFile {
-                source: err,
-                sparse_path: self.sparse_path.clone(),
-            })?;
-
-        let old_rules: HashSet<String> = rules.into_iter().map(|rule| rule.into()).collect();
-        let filtered: Vec<&str> = content
-            .lines()
-            .filter(|line| !old_rules.contains(*line))
-            .collect();
-
-        // INVARIANT: Append trailing newline to end of rule set.
-        let result = if filtered.is_empty() {
-            String::new()
-        } else {
-            format!("{}\n", filtered.join("\n"))
-        };
-
-        write(&self.sparse_path, result.as_bytes()).map_err(|err| {
-            SparseError::WriteSparseFile {
-                source: err,
-                sparse_path: self.sparse_path.clone(),
-            }
-        })?;
-
-        Ok(())
-    }
-
-    /// List out current rule set.
-    ///
-    /// # Errors
-    ///
-    /// - Return [`SparseError::ReadSparseFile`] if configuration file cannot
-    ///   be read from.
+    /// - Return [`SparseError::ReadSparseFile`] if sparse checkout
+    ///   configuration file cannot be read.
     pub fn current_rules(&self) -> Result<Vec<String>> {
-        let content =
-            read_to_string(&self.sparse_path).map_err(|err| SparseError::ReadSparseFile {
+        read_to_string(&self.sparse_path)
+            .map_err(|err| SparseError::ReadSparseFile {
                 source: err,
                 sparse_path: self.sparse_path.clone(),
-            })?;
-
-        Ok(content.lines().map(String::from).collect())
+            })
+            .map(|content| content.lines().map(str::to_owned).collect::<Vec<_>>())
     }
 
-    /// Clear out _all_ sparsity rules.
+    /// Match file path to current sparsity rules relative to a work tree alias.
     ///
-    /// # Errors
-    ///
-    /// - Return [`SparseError::WriteSparseFile`] if configuration file cannot
-    ///   be written to.
-    pub fn clear_rules(&self) -> Result<()> {
-        write(&self.sparse_path, b"").map_err(|err| SparseError::WriteSparseFile {
-            source: err,
-            sparse_path: self.sparse_path.clone(),
-        })
-    }
-
+    /// Matches file path against all currently avaiable sparsity rules
+    /// relative the a target work tree alias using given [`SparsityMatcher`].
     pub fn path_matches(&self, work_tree_alias: &WorkTreeAlias, path: impl AsRef<Path>) -> bool {
         self.matcher
             .path_matches(work_tree_alias, path, self.current_rules().unwrap())
     }
 }
 
+/// Sparsity rule editor.
+///
+/// # Invariant
+///
+/// - No duplicate sparsity rules.
+/// - Rule insertion does not overwrite existing rules.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SparsityEdit {
+    rules: HashSet<String>,
+    changed: bool,
+}
+
+impl SparsityEdit {
+    /// Construct new sparsity rule editor.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert a sparsity rule.
+    pub fn insert_rule(&mut self, rule: impl Into<String>) {
+        let rule = rule.into();
+        if self.rules.insert(rule) {
+            self.changed = true;
+        }
+    }
+
+    /// Insert a listing of sparsity rules.
+    pub fn insert_rules(&mut self, rules: impl IntoIterator<Item = impl Into<String>>) {
+        for rule in rules {
+            let rule = rule.into();
+            if self.rules.insert(rule) {
+                self.changed = true;
+            }
+        }
+    }
+
+    /// Remove a sparsity rule
+    pub fn remove_rule(&mut self, rule: impl AsRef<str>) {
+        if self.rules.remove(rule.as_ref()) {
+            self.changed = true;
+        }
+    }
+
+    /// Remove a listing of sparsity rules.
+    pub fn remove_rules(&mut self, rules: impl IntoIterator<Item = impl AsRef<str>>) {
+        for rule in rules {
+            if self.rules.remove(rule.as_ref()) {
+                self.changed = true;
+            }
+        }
+    }
+
+    /// Clear all sparsity rules.
+    pub fn clear_rules(&mut self) {
+        if !self.rules.is_empty() {
+            self.rules.clear();
+            self.changed = true;
+        }
+    }
+}
+
+impl Display for SparsityEdit {
+    fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
+        if self.rules.is_empty() {
+            return write!(fmt, "");
+        }
+
+        let mut rules: Vec<_> = self.rules.iter().collect();
+        rules.sort();
+
+        let mut out = String::new();
+        for rule in rules {
+            out.push_str(rule);
+            out.push('\n');
+        }
+
+        write!(fmt, "{out}")
+    }
+}
+
+impl From<String> for SparsityEdit {
+    fn from(content: String) -> Self {
+        let rules = content.lines().map(str::to_owned).collect::<HashSet<_>>();
+
+        Self {
+            rules,
+            changed: false,
+        }
+    }
+}
+
+impl From<&str> for SparsityEdit {
+    fn from(content: &str) -> Self {
+        let rules = content.lines().map(str::to_owned).collect::<HashSet<_>>();
+
+        Self {
+            rules,
+            changed: false,
+        }
+    }
+}
+
 /// Match sparsity rules.
 ///
 /// Model ways to match sparsity rules to various stuff.
-pub trait SparsityMatcher {
+pub trait SparsityMatcher: Send + Sync + 'static {
     /// Match a path to a listing of sparsity rules.
     ///
     /// Compare path to each rule to see if it matches.
@@ -263,7 +300,7 @@ pub trait SparsityMatcher {
     ) -> bool;
 }
 
-/// A sparsity ruler matcher that inverts gitignore semantics.
+/// A sparsity rule matcher that inverts gitignore semantics.
 ///
 /// Takes a gitignore rule parser, and inverts incoming patterns to match
 /// sparsity patterns instead. Is this very lazy and hacky way to interpret
@@ -355,3 +392,85 @@ pub enum SparseError {
 
 /// Friendly result alias :3
 type Result<T, E = SparseError> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indoc::indoc;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn sparsity_edit_rule_insertion() {
+        let mut editor = SparsityEdit::default();
+
+        editor.insert_rule("/.vim/");
+        editor.insert_rule("!*.aux");
+        editor.insert_rule("/**/bin");
+        let result = editor.to_string();
+        let expect = indoc! {r#"
+            !*.aux
+            /**/bin
+            /.vim/
+        "#};
+        assert_eq!(result, expect);
+
+        editor.insert_rules(["cluster.toml", "/.ssh", "/*"]);
+        let result = editor.to_string();
+        let expect = indoc! {r#"
+            !*.aux
+            /*
+            /**/bin
+            /.ssh
+            /.vim/
+            cluster.toml
+        "#};
+        assert_eq!(result, expect);
+
+        // No duplication.
+        editor.insert_rule("/.vim/");
+        let result = editor.to_string();
+        assert_eq!(result, expect);
+    }
+
+    #[test]
+    fn sparsity_edit_rule_removal() {
+        let rule_set = indoc! {r#"
+            !*.aux
+            /*
+            /**/bin
+            /.ssh
+            /.vim/
+            cluster.toml
+        "#};
+        let mut editor = SparsityEdit::from(rule_set);
+
+        editor.remove_rule("/**/bin");
+        editor.remove_rule("cluster.toml");
+        editor.remove_rule("/.ssh");
+        let result = editor.to_string();
+        let expect = indoc! {r#"
+            !*.aux
+            /*
+            /.vim/
+        "#};
+        assert_eq!(result, expect);
+    }
+
+    #[test]
+    fn sparsity_edit_clear_rules() {
+        let rule_set = indoc! {r#"
+            !*.aux
+            /*
+            /**/bin
+            /.ssh
+            /.vim/
+            cluster.toml
+        "#};
+        let mut editor = SparsityEdit::from(rule_set);
+
+        editor.clear_rules();
+        let result = editor.to_string();
+        let expect = String::new();
+        assert_eq!(result, expect);
+    }
+}
