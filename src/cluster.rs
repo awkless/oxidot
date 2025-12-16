@@ -148,9 +148,10 @@ where
     ///
     /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn deploy_default_rules(&self) -> Result<()> {
+        let work_tree_alias = &self.definition.settings.work_tree_alias;
         if let Some(default) = &self.definition.settings.include {
-            self.deployer
-                .deploy_with_rules(&self.definition.settings.work_tree_alias, default)?;
+            self.deployer.undeploy_all(work_tree_alias)?;
+            self.deployer.deploy_with_rules(work_tree_alias, default)?;
         }
 
         Ok(())
@@ -166,9 +167,10 @@ where
     ///
     /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn undeploy_default_rules(&self) -> Result<()> {
+        let work_tree_alias = &self.definition.settings.work_tree_alias;
         if let Some(default) = &self.definition.settings.include {
             self.deployer
-                .undeploy_with_rules(&self.definition.settings.work_tree_alias, default)?;
+                .undeploy_with_rules(work_tree_alias, default)?;
         }
 
         Ok(())
