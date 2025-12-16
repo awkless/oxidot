@@ -56,8 +56,8 @@
 //! # See Also
 //!
 //! 1. [ArchWiki - dotfiles](https://wiki.archlinux.org/title/Dotfiles#Tracking_dotfiles_directly_with_Git)
-//! 2. [`ClusterDefinition`](crate::config::ClusterDefinition)
-//! 3. [`sparse`](crate::cluster::sparse)
+//! 2. [`ClusterDefinition`]
+//! 3. [`sparse`]
 
 pub mod deploy;
 pub mod sparse;
@@ -105,6 +105,13 @@ where
         }
     }
 
+    /// Deploy tracked files to work tree alias that match sparsity rules.
+    ///
+    /// Adds target rules to match tracked files, and updates cluster's index.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn deploy_with_rules(
         &self,
         rules: impl IntoIterator<Item = impl Into<String>>,
@@ -114,6 +121,14 @@ where
             .deploy_with_rules(&self.definition.settings.work_tree_alias, rules)?)
     }
 
+    /// Undeploy tracked files from work tree alias that match sparsity rules.
+    ///
+    /// Removes target rules from sparse checkout configuration file, and
+    /// applies updates to cluster's index.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn undeploy_with_rules(
         &self,
         rules: impl IntoIterator<Item = impl AsRef<str>>,
@@ -123,6 +138,15 @@ where
             .undeploy_with_rules(&self.definition.settings.work_tree_alias, rules)?)
     }
 
+    /// Deploy tracked files based on default set of spasrity rules provided by
+    /// cluster definition.
+    ///
+    /// Clears current sparsity rules, and replaces them with default
+    /// sparsity rules from cluster definition.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn deploy_default_rules(&self) -> Result<()> {
         if let Some(default) = &self.definition.settings.include {
             self.deployer
@@ -132,6 +156,15 @@ where
         Ok(())
     }
 
+    /// Undeploy tracked files based on default set of spasrity rules provided
+    /// by cluster definition.
+    ///
+    /// Removes only the rules that match the default sparsity rules provided
+    /// by the cluster definition.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn undeploy_default_rules(&self) -> Result<()> {
         if let Some(default) = &self.definition.settings.include {
             self.deployer
@@ -141,23 +174,62 @@ where
         Ok(())
     }
 
+    /// Deploy all tracked files of cluster to work tree alias.
+    ///
+    /// Replaces entire sparsity rule set with one rule: "/*". Applies this
+    /// new and only rule to cluster's index.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn deploy_all(&self) -> Result<()> {
         Ok(self
             .deployer
             .deploy_all(&self.definition.settings.work_tree_alias)?)
     }
 
+    /// Undeploy all tracked files of cluster from work tree alias.
+    ///
+    /// Simply clears entire sparsity rule set, and applies this change to the
+    /// cluster's index.
+    ///
+    /// # Panics
+    ///
+    /// - May panic if spasrity rule parsing fails.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn undeploy_all(&self) -> Result<()> {
         Ok(self
             .deployer
             .undeploy_all(&self.definition.settings.work_tree_alias)?)
     }
 
+    /// Check if cluster has deployed tracked files to work tree alias.
+    ///
+    /// Performs a first occurance search through each tracked file in the
+    /// cluster such that the tracked file that matches a sparsity rule, and
+    /// exists in the cluster's work tree alias, means that the cluster is
+    /// deployed. Otherwise, the cluster is not deployed.
+    ///
+    /// # Panics
+    ///
+    /// - May panic if spasrity rule parsing fails.
     pub fn is_deployed(&self) -> bool {
         self.deployer
             .is_deployed(&self.definition.settings.work_tree_alias)
     }
 
+    /// Interact with cluster directly through Git via current process.
+    ///
+    /// Preserves consistency between sparsity rules and index when caller
+    /// uses commands like git-add, git-rm, etc. Blocks current process to allow
+    /// for direct interaction with cluster through Git.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn gitcall_interactive(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -167,6 +239,15 @@ where
             .gitcall_interactive(&self.definition.settings.work_tree_alias, args)?)
     }
 
+    /// Interact with cluster directly through Git via external process.
+    ///
+    /// Does not block current process. Instead the system call is made via
+    /// external process whose output to stdout and stderr is returned
+    /// together as a [`String`].
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn gitcall_non_interactive(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -177,16 +258,33 @@ where
     }
 }
 
-pub trait ClusterAccess {
+/// Layer of indirection for cluster access.
+pub trait ClusterAccess: Send + Sync + 'static {
+    /// Initialize a new cluster.
     fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster>;
+
+    /// Open existing cluster.
     fn try_open(path: impl AsRef<Path>) -> Result<Cluster>;
+
+    /// Clone existing cluster from remote repository.
     fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar) -> Result<Cluster>;
 }
 
-#[derive(Debug)]
+/// Cluster access through libgit2.
+#[derive(Debug, Default)]
 pub struct Git2Cluster;
 
 impl ClusterAccess for Git2Cluster {
+    /// Initialize a new cluster.
+    ///
+    /// Initializes a new cluster at target path based on a given cluster
+    /// definition. That cluster definition will be staged and committed
+    /// directly into the cluster's commit history as the initial commit.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Git2`] if libgit2 operations fail.
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     #[instrument(skip(path, definition), level = "debug")]
     fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster> {
         info!("initialize new cluster: {:?}", path.as_ref().display());
@@ -213,6 +311,16 @@ impl ClusterAccess for Git2Cluster {
         Ok(cluster)
     }
 
+    /// Open existing cluster.
+    ///
+    /// Opens cluster at target path, and loads up its cluster definition at the
+    /// top-level.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Git2`] if libgit2 operations fail.
+    /// - Return [`ClusterError::Config`] if cluster definition parsing fails.
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     #[instrument(skip(path), level = "debug")]
     fn try_open(path: impl AsRef<Path>) -> Result<Cluster> {
         debug!("open cluster: {:?}", path.as_ref().display());
@@ -228,6 +336,22 @@ impl ClusterAccess for Git2Cluster {
         })
     }
 
+    /// Clone existing cluster from remote repository.
+    ///
+    /// Clones existing cluster from remote repository through target URL to
+    /// target path. The progress of the clone is displayed through a progress
+    /// bar. The cluster definition is then extracted at the top-level after
+    /// the cloning is done.
+    ///
+    /// If any credentials are required for the clone to continue is required,
+    /// then the user will be prompted for that information accordingly. The
+    /// progress bar will be blocked for user input.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Git2`] if libgit2 operations fail.
+    /// - Return [`ClusterError::Config`] if cluster definition parsing fails.
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar) -> Result<Cluster> {
         let style = ProgressStyle::with_template(
             "{elapsed_precise:.green}  {msg:<50}  [{wide_bar:.yellow/blue}]",
@@ -275,12 +399,14 @@ impl ClusterAccess for Git2Cluster {
     }
 }
 
+/// Git2 authentication prompter for progress bar.
 #[derive(Debug, Clone)]
 pub struct IndicatifPrompter {
     pub(crate) bar: ProgressBar,
 }
 
 impl IndicatifPrompter {
+    /// Construct new progress bar authenticator.
     pub fn new(bar: ProgressBar) -> Self {
         Self { bar }
     }
@@ -343,20 +469,26 @@ impl Prompter for IndicatifPrompter {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClusterError {
+    /// Deployment logic fails.
     #[error(transparent)]
     Deployment(#[from] crate::cluster::deploy::DeployError),
 
+    /// Sparse checkout configuration file manipulation fails.
     #[error(transparent)]
     Sparse(#[from] crate::cluster::sparse::SparseError),
 
+    /// Cluster definition parsing fails.
     #[error(transparent)]
     Config(#[from] crate::config::ConfigError),
 
+    /// Style template cannot be set for progress bars.
     #[error(transparent)]
     IndicatifStyleTemplate(#[from] indicatif::style::TemplateError),
 
+    /// Operations from libgit2 fail.
     #[error(transparent)]
     Git2(#[from] git2::Error),
 }
 
+/// Friendly result alias :3
 type Result<T, E = ClusterError> = std::result::Result<T, E>;
