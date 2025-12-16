@@ -177,8 +177,7 @@ where
 pub trait ClusterAccess {
     fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster>;
     fn try_open(path: impl AsRef<Path>) -> Result<Cluster>;
-    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar)
-        -> Result<Cluster>;
+    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar) -> Result<Cluster>;
 }
 
 #[derive(Debug)]
@@ -197,7 +196,6 @@ impl ClusterAccess for Git2Cluster {
             definition,
             deployer,
         };
-
         let contents = &cluster.definition.to_string();
         info!(
             "stage and commit the following cluster definition:\n{}",
@@ -227,11 +225,7 @@ impl ClusterAccess for Git2Cluster {
         })
     }
 
-    fn try_clone(
-        url: impl AsRef<str>,
-        path: impl AsRef<Path>,
-        bar: ProgressBar,
-    ) -> Result<Cluster> {
+    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar) -> Result<Cluster> {
         let style = ProgressStyle::with_template(
             "{elapsed_precise:.green}  {msg:<50}  [{wide_bar:.yellow/blue}]",
         )?
@@ -261,7 +255,6 @@ impl ClusterAccess for Git2Cluster {
 
         let mut fo = FetchOptions::new();
         fo.remote_callbacks(rc);
-
         let repository = RepoBuilder::new()
             .bare(true)
             .fetch_options(fo)
