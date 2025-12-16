@@ -25,11 +25,15 @@ use std::{
 };
 use tracing::{debug, info, instrument, warn};
 
+/// Core deployment logic.
 pub trait Deployment {
+    /// Check if cluster is empty.
     fn is_empty(&self) -> bool;
 
+    /// Get contents of file from cluster.
     fn cat_file(&self, path: impl AsRef<Path>) -> Result<String>;
 
+    /// Stage and commit content into cluster.
     fn stage_and_commit(
         &self,
         filename: impl AsRef<Path>,
@@ -37,30 +41,37 @@ pub trait Deployment {
         message: impl AsRef<str>,
     ) -> Result<()>;
 
+    /// Deploy tracked files to work tree alias that match sparsity rules.
     fn deploy_with_rules(
         &self,
         work_tree_alias: &WorkTreeAlias,
         rules: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<()>;
 
+    /// Undeploy tracked files from work tree alias that match sparsity rules.
     fn undeploy_with_rules(
         &self,
         work_tree_alias: &WorkTreeAlias,
         rules: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<()>;
 
+    /// Deploy all tracked files to work tree alias.
     fn deploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()>;
 
+    /// Undeploy all tracked files from work tree alias.
     fn undeploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()>;
 
+    /// Check if cluster has deployed any tracked files to work tree alias.
     fn is_deployed(&self, work_tree_alias: &WorkTreeAlias) -> bool;
 
+    /// Block process to intract with cluster through Git.
     fn gitcall_interactive(
         &self,
         work_tree_alias: &WorkTreeAlias,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Result<()>;
 
+    /// Interact with cluster through Git without blocking process.
     fn gitcall_non_interactive(
         &self,
         work_tree_alias: &WorkTreeAlias,
@@ -68,12 +79,26 @@ pub trait Deployment {
     ) -> Result<String>;
 }
 
+/// Cluster deployment logic backed by libgit2.
 pub struct Git2Deployer {
     repository: Repository,
     sparsity: SparsityDrafter<InvertedGitignore>,
 }
 
 impl Git2Deployer {
+    /// Construct new libgit2 cluster deployer.
+    ///
+    /// Always ensures that these configuration settings are enabled by
+    /// default:
+    ///
+    /// 1. Do not show untracked files.
+    /// 2. Always enable sparse checkout.
+    /// 3. Allow changes to work tree alias outside of sparsity rules.
+    ///
+    /// # Error
+    ///
+    /// - Return [`DeployError::Git2`] if configuration settings cannot be set
+    ///   for cluster.
     pub fn new(
         repository: Repository,
         sparsity: SparsityDrafter<InvertedGitignore>,
@@ -264,12 +289,29 @@ impl Debug for Git2Deployer {
 }
 
 impl Deployment for Git2Deployer {
+    /// Get contents of file from cluster.
+    ///
+    /// Searches for a blob that matches the target path in the cluster's
+    /// index. That blob is then converted into a valid string and returned.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Git2`] if any libgit2 operations fail.
     fn cat_file(&self, path: impl AsRef<Path>) -> Result<String> {
         let blob = self.find_blob(path.as_ref())?;
 
         Ok(String::from_utf8_lossy(blob.content()).into_owned())
     }
 
+    /// Stage and commit a new file into cluster.
+    ///
+    /// Add a new file with content into the cluster's index directly and
+    /// commit it with a message. The commit is placed after the most recent
+    /// commit.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Git2`] if any libgit2 operations fail.
     fn stage_and_commit(
         &self,
         filename: impl AsRef<Path>,
@@ -329,6 +371,13 @@ impl Deployment for Git2Deployer {
         Ok(())
     }
 
+    /// Check if cluster is empty.
+    ///
+    /// A cluster is empty if it does not have a HEAD with a valid commit.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Git2`] if any libgit2 operations fail.
     fn is_empty(&self) -> bool {
         self.repository
             .head()
@@ -338,6 +387,16 @@ impl Deployment for Git2Deployer {
             .is_none()
     }
 
+    /// Deploy tracked files to work tree alias that match sparsity rules.
+    ///
+    /// Adds target rules to match tracked files, and updates cluster's index.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Syscall`] if changes to sparsity rule set fails
+    ///   to be applied.
+    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`DeployError::Git2`] if cluster index operations fail.
     #[instrument(skip(self, work_tree_alias, rules), level = "debug")]
     fn deploy_with_rules(
         &self,
@@ -357,6 +416,17 @@ impl Deployment for Git2Deployer {
         Ok(())
     }
 
+    /// Undeploy tracked files from work tree alias that match sparsity rules.
+    ///
+    /// Removes target rules from sparse checkout configuration file, and
+    /// applies updates to cluster's index.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Syscall`] if changes to sparsity rule set fails
+    ///   to be applied.
+    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`DeployError::Git2`] if cluster index operations fail.
     #[instrument(skip(self, work_tree_alias, rules), level = "debug")]
     fn undeploy_with_rules(
         &self,
@@ -376,6 +446,17 @@ impl Deployment for Git2Deployer {
         Ok(())
     }
 
+    /// Deploy all tracked files of cluster to work tree alias.
+    ///
+    /// Replaces entire sparsity rule set with one rule: "/*". Applies this
+    /// new and only rule to cluster's index.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Syscall`] if changes to sparsity rule set fails
+    ///   to be applied.
+    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`DeployError::Git2`] if cluster index operations fail.
     #[instrument(skip(self), level = "debug")]
     fn deploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()> {
         info!("deploy all of {:?}", self.repository.path().display());
@@ -394,6 +475,21 @@ impl Deployment for Git2Deployer {
         Ok(())
     }
 
+    /// Undeploy all tracked files of cluster from work tree alias.
+    ///
+    /// Simply clears entire sparsity rule set, and applies this change to the
+    /// cluster's index.
+    ///
+    /// # Panics
+    ///
+    /// - May panic if spasrity rule parsing fails.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Syscall`] if changes to sparsity rule set fail
+    ///   to be applied.
+    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`DeployError::Git2`] if cluster index operations fail.
     #[instrument(skip(self), level = "debug")]
     fn undeploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()> {
         if !self.is_deployed(work_tree_alias) {
@@ -411,6 +507,16 @@ impl Deployment for Git2Deployer {
         Ok(())
     }
 
+    /// Check if cluster has deployed tracked files to work tree alias.
+    ///
+    /// Performs a first occurance search through each tracked file in the
+    /// cluster such that the tracked file that matches a sparsity rule, and
+    /// exists in the cluster's work tree alias, means that the cluster is
+    /// deployed. Otherwise, the cluster is not deployed.
+    ///
+    /// # Panics
+    ///
+    /// - May panic if spasrity rule parsing fails.
     fn is_deployed(&self, work_tree_alias: &WorkTreeAlias) -> bool {
         if self.is_empty() {
             return false;
@@ -440,6 +546,18 @@ impl Deployment for Git2Deployer {
         false
     }
 
+    /// Interact with cluster directly through Git via current process.
+    ///
+    /// Preserves consistency between sparsity rules and index when caller
+    /// uses commands like git-add, git-rm, etc. Blocks current process to allow
+    /// for direct interaction with cluster through Git.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Syscall`] if system call to Git fails, or Git
+    ///   itself fails.
+    /// - Return [`DeployError::Git2`] if any operation on the cluster's index
+    ///   fails.
     fn gitcall_interactive(
         &self,
         work_tree_alias: &WorkTreeAlias,
@@ -458,6 +576,18 @@ impl Deployment for Git2Deployer {
         Ok(())
     }
 
+    /// Interact with cluster directly through Git via external process.
+    ///
+    /// Does not block current process. Instead the system call is made via
+    /// external process whose output to stdout and stderr is returned
+    /// together as a [`String`].
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Syscall`] if system call to Git fails, or Git
+    ///   itself fails.
+    /// - Return [`DeployError::Git2`] if any operation on the cluster's index
+    ///   fails.
     fn gitcall_non_interactive(
         &self,
         work_tree_alias: &WorkTreeAlias,
@@ -531,19 +661,25 @@ fn bytes_to_path(byts: &[u8]) -> PathBuf {
     Path::new(str::from_utf8(bytes).unwrap())
 }
 
+/// Deployment logic error types.
 #[derive(Debug, thiserror::Error)]
 pub enum DeployError {
+    /// Sparse checkout configuration file manipulation fails.
     #[error(transparent)]
     Sparse(#[from] crate::cluster::sparse::SparseError),
 
+    /// Target blob in cluster's index cannot be found.
     #[error("cannot find file blob for {:?}", path.display())]
     BlobNotFound { path: PathBuf },
 
+    /// Operations from libgit2 fail.
     #[error(transparent)]
     Git2(#[from] git2::Error),
 
+    /// System calls fail.
     #[error(transparent)]
     Syscall(#[from] std::io::Error),
 }
 
+/// Friendly result alias :3
 type Result<T, E = DeployError> = std::result::Result<T, E>;
