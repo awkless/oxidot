@@ -15,7 +15,7 @@ use crate::{
     config::WorkTreeAlias,
 };
 
-use git2::{Blob, ObjectType, Repository, IndexTime, IndexEntry};
+use git2::{Blob, IndexEntry, IndexTime, ObjectType, Repository};
 use std::{
     collections::{HashSet, VecDeque},
     ffi::{OsStr, OsString},
@@ -74,7 +74,10 @@ pub struct Git2Deployer {
 }
 
 impl Git2Deployer {
-    pub fn new(repository: Repository, sparsity: SparsityDrafter<InvertedGitignore>) -> Result<Self> {
+    pub fn new(
+        repository: Repository,
+        sparsity: SparsityDrafter<InvertedGitignore>,
+    ) -> Result<Self> {
         let deployer = Self {
             repository,
             sparsity,
