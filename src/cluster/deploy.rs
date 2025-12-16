@@ -155,7 +155,7 @@ impl Git2Deployer {
                     // INVARIANT: Hit a blob? Check it!
                     Some(ObjectType::Blob) => {
                         let full_path = path.join(bytes_to_path(tree_entry.name_bytes()));
-                        if &full_path == &path {
+                        if full_path == path {
                             return Ok(tree_entry.to_object(&self.repository)?.peel_to_blob()?);
                         }
                         entries.push(full_path);

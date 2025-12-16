@@ -316,7 +316,7 @@ impl InvertedGitignore {
     ///
     /// Base pattern matching relative to target work tree alias.
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
