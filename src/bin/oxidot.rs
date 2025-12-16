@@ -1,15 +1,8 @@
 // SPDX-FileCopyrightText: 2025 Jason Pena <jasonpena@awkless.com>
 // SPDX-License-Identifier: MIT
 
-use oxidot::{
-    config::{ClusterDefinition, WorkTreeAlias},
-    path::{default_cluster_store_dir, home_dir},
-    Cluster, ProgressBarAuthenticator, Store,
-};
-
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use indicatif::{MultiProgress, ProgressBar};
 use std::{ffi::OsString, path::PathBuf, process::exit};
 use tracing::error;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -200,143 +193,30 @@ async fn run() -> Result<()> {
     Cli::parse().run().await
 }
 
-fn run_init(opts: InitOptions) -> Result<()> {
-    let mut definition = ClusterDefinition::default();
-    definition.settings.description = match opts.description {
-        Some(description) => description,
-        None => "<put one sentence description here>".into(),
-    };
-    definition.settings.url = match opts.url {
-        Some(url) => url,
-        None => "<put url to remote here>".into(),
-    };
-    definition.settings.work_tree_alias = match opts.work_tree_alias {
-        Some(path) => WorkTreeAlias::new(path),
-        None => WorkTreeAlias::new(home_dir()?),
-    };
-
-    let _ = Cluster::try_new_init(
-        default_cluster_store_dir()?.join(format!("{}.git", opts.cluster_name)),
-        definition,
-    )?;
-
-    Ok(())
+fn run_init(__opts: InitOptions) -> Result<()> {
+    todo!();
 }
 
-async fn run_clone(opts: CloneOptions) -> Result<()> {
-    let store = Store::new(default_cluster_store_dir()?)?;
-    let path = default_cluster_store_dir()?.join(format!("{}.git", &opts.cluster_name));
-    let bars = MultiProgress::new();
-    let bar = bars.add(ProgressBar::no_length());
-    let auth_bar = ProgressBarAuthenticator::new(bar);
-
-    let cluster = Cluster::try_new_clone(&opts.url, path, auth_bar)?;
-    store.insert(&opts.cluster_name, cluster);
-    let resolved = store
-        .resolve_dependencies(&opts.cluster_name, opts.jobs)
-        .await?;
-    store.with_clusters(|clusters| {
-        let entries = resolved
-            .into_iter()
-            .map(|dep| clusters.get(&dep).unwrap())
-            .collect::<Vec<_>>();
-        for entry in entries {
-            entry.deploy_default_rules()?;
-        }
-
-        Ok(())
-    })
+async fn run_clone(_opts: CloneOptions) -> Result<()> {
+    todo!();
 }
 
-fn run_deploy(opts: DeployOptions) -> Result<()> {
-    let store = Store::new(default_cluster_store_dir()?)?;
-    store.with_clusters(|clusters| {
-        let cluster = clusters
-            .get(&opts.cluster_name)
-            .ok_or(anyhow!("cluster {:?} not found", &opts.cluster_name))?;
-
-        if !opts.sparsity_rules.is_empty() {
-            return cluster.deploy_rules(opts.sparsity_rules);
-        }
-
-        if opts.all {
-            return cluster.deploy_all();
-        }
-
-        if opts.default {
-            return cluster.deploy_default_rules();
-        }
-
-        Ok(())
-    })
+fn run_deploy(_opts: DeployOptions) -> Result<()> {
+    todo!();
 }
 
-fn run_undeploy(opts: UndeployOptions) -> Result<()> {
-    let store = Store::new(default_cluster_store_dir()?)?;
-    store.with_clusters(|clusters| {
-        let cluster = clusters
-            .get(&opts.cluster_name)
-            .ok_or(anyhow!("cluster {:?} not found", &opts.cluster_name))?;
-
-        if !opts.sparsity_rules.is_empty() {
-            return cluster.undeploy_rules(opts.sparsity_rules);
-        }
-
-        if opts.all {
-            return cluster.undeploy_all();
-        }
-
-        if opts.default {
-            return cluster.undeploy_default_rules();
-        }
-
-        Ok(())
-    })
+fn run_undeploy(_opts: UndeployOptions) -> Result<()> {
+    todo!();
 }
 
-fn run_list(opts: ListOptions) -> Result<()> {
-    let store = Store::new(default_cluster_store_dir()?)?;
-
-    if let Some(cluster_name) = opts.sparsity_rules {
-        store.with_clusters(|clusters| {
-            clusters
-                .get(&cluster_name)
-                .ok_or(anyhow!("cluster {:?} not found", &cluster_name))?
-                .show_deploy_rules()
-        })?;
-    } else if let Some(cluster_name) = opts.files {
-        store.with_clusters(|clusters| {
-            clusters
-                .get(&cluster_name)
-                .ok_or(anyhow!("cluster {:?} not found", &cluster_name))?
-                .show_tracked_files()
-        })?;
-    } else if opts.deployed {
-        store.list_deployed();
-    } else if opts.undeployed {
-        store.list_undeployed();
-    } else {
-        store.list_fully();
-    }
-
-    Ok(())
+fn run_list(_opts: ListOptions) -> Result<()> {
+    todo!();
 }
 
-fn run_remove(opts: RemoveOptions) -> Result<()> {
-    let store = Store::new(default_cluster_store_dir()?)?;
-    for name in &opts.cluster_name {
-        store.remove(name)?;
-    }
-
-    Ok(())
+fn run_remove(_opts: RemoveOptions) -> Result<()> {
+    todo!();
 }
 
-fn run_git(opts: Vec<OsString>) -> Result<()> {
-    // TODO: Allow for multiple clusters to be targeted.
-    let target = opts[0].to_string_lossy().into_owned();
-    let cluster =
-        Cluster::try_new_open(default_cluster_store_dir()?.join(format!("{}.git", target)))?;
-    cluster.gitcall_interactive(opts[1..].to_vec())?;
-
-    Ok(())
+fn run_git(_opts: Vec<OsString>) -> Result<()> {
+    todo!();
 }
