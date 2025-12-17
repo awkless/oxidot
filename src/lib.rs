@@ -13,3 +13,4 @@
 pub mod cluster;
 pub mod config;
 pub mod path;
+pub mod store;
