@@ -201,11 +201,19 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn undeploy_all(&self) -> Result<()> {
         Ok(self
             .deployer
             .undeploy_all(&self.definition.settings.work_tree_alias)?)
+    }
+
+    /// List current set of sparsity rules used for deployment.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    pub fn list_deploy_rules(&self) -> Result<Vec<String>> {
+        Ok(self.deployer.list_deploy_rules()?)
     }
 
     /// Check if cluster has deployed tracked files to work tree alias.
