@@ -34,6 +34,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
+use tracing::{instrument, warn, info};
 
 #[derive(Debug)]
 pub(crate) struct StoreState {
@@ -206,6 +207,32 @@ impl Store {
                 })?;
 
         usage(cluster)
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    pub fn detailed_status(&self) {
+        let state = self.lock_state();
+        if state.clusters.is_empty() {
+            warn!("cluster store is empty");
+            return;
+        }
+
+        let mut status = String::new();
+        for (name, entry) in state.clusters.iter() {
+            let deployment = if entry.is_deployed() {
+                "[  deployed]"
+            } else {
+                "[undeployed]"
+            };
+
+            let data = format!(
+                "{} {} -> {}\n",
+                deployment, name, entry.definition.settings.work_tree_alias,
+            );
+            status.push_str(data.as_str());
+        }
+
+        info!("all avaliable clusters:\n{}", status);
     }
 
     #[inline]
