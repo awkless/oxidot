@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2025 Jason Pena <jasonpena@awkless.com>
 // SPDX-License-Identifier: MIT
 
+use oxidot::{path::default_cluster_store_dir, store::Store};
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::{ffi::OsString, path::PathBuf, process::exit};
@@ -94,9 +96,6 @@ struct CloneOptions {
     /// URL of remote to clone from.
     #[arg(required = true, value_name = "url")]
     pub url: String,
-
-    /// Number of jobs to run during dependency resoultion.
-    pub jobs: Option<usize>,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -197,8 +196,11 @@ fn run_init(__opts: InitOptions) -> Result<()> {
     todo!();
 }
 
-async fn run_clone(_opts: CloneOptions) -> Result<()> {
-    todo!();
+async fn run_clone(opts: CloneOptions) -> Result<()> {
+    let store = Store::open(default_cluster_store_dir()?)?;
+    store.clone_cluster(opts.cluster_name, opts.url).await?;
+
+    Ok(())
 }
 
 fn run_deploy(_opts: DeployOptions) -> Result<()> {
@@ -217,6 +219,12 @@ fn run_remove(_opts: RemoveOptions) -> Result<()> {
     todo!();
 }
 
-fn run_git(_opts: Vec<OsString>) -> Result<()> {
-    todo!();
+fn run_git(opts: Vec<OsString>) -> Result<()> {
+    let store = Store::open(default_cluster_store_dir()?)?;
+    let target = opts[0].to_string_lossy().into_owned();
+    store.use_cluster(target, |cluster| {
+        cluster.gitcall_interactive(opts[1..].to_vec())?;
+        Ok(())
+    })?;
+    Ok(())
 }

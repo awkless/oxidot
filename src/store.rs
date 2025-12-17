@@ -22,7 +22,10 @@
 //! to this is by listing a cluster as a dependency of another cluster via
 //! the cluster definition file.
 
-use crate::cluster::{Cluster, ClusterAccess, Git2Cluster};
+use crate::{
+    config::ClusterDefinition,
+    cluster::{Cluster, ClusterAccess, Git2Cluster},
+};
 
 use futures::future::join_all;
 use indicatif::{MultiProgress, ProgressBar};
@@ -114,6 +117,15 @@ impl Store {
 
         // TODO: Add checks for valid cluster store structure at some point.
         Ok(store)
+    }
+
+    pub fn init_cluster(&self, name: impl Into<String>, definition: ClusterDefinition) -> Result<()> {
+        let mut state = self.lock_state();
+        let name = name.into();
+        let path = state.store_path.join(&name).join(".git");
+        state.clusters.insert(name.into(), Git2Cluster::try_init(path, definition)?);
+
+        Ok(())
     }
 
     pub async fn clone_cluster(
