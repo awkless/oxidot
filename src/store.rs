@@ -235,6 +235,28 @@ impl Store {
         info!("all avaliable clusters:\n{}", status);
     }
 
+    #[instrument(skip(self), level = "debug")]
+    pub fn deployed_only_status(&self) {
+        let state = self.lock_state();
+        if state.clusters.is_empty() {
+            warn!("cluster store is empty");
+            return;
+        }
+
+        let mut status = String::new();
+        for (name, entry) in state.clusters.iter() {
+            if entry.is_deployed() {
+                let data = format!(
+                    "{} -> {}\n",
+                    name, entry.definition.settings.work_tree_alias,
+                );
+                status.push_str(data.as_str());
+            }
+        }
+
+        info!("all deployed clusters:\n{}", status);
+    }
+
     #[inline]
     fn lock_state(&self) -> MutexGuard<'_, StoreState> {
         self.state.lock().unwrap()
