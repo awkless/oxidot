@@ -135,7 +135,7 @@ impl Git2Deployer {
         }
     }
 
-    fn find_blob(&self, path: impl AsRef<Path>) -> Result<Blob<'_>> {
+    fn find_blob(&self, target: impl AsRef<Path>) -> Result<Blob<'_>> {
         let mut entries = Vec::new();
         let commit = self.repository.head()?.peel_to_commit()?;
         let tree = commit.tree()?;
@@ -155,7 +155,7 @@ impl Git2Deployer {
                     // INVARIANT: Hit a blob? Check it!
                     Some(ObjectType::Blob) => {
                         let full_path = path.join(bytes_to_path(tree_entry.name_bytes()));
-                        if full_path == path {
+                        if full_path == target.as_ref() {
                             return Ok(tree_entry.to_object(&self.repository)?.peel_to_blob()?);
                         }
                         entries.push(full_path);
@@ -166,7 +166,7 @@ impl Git2Deployer {
         }
 
         Err(DeployError::BlobNotFound {
-            path: path.as_ref().into(),
+            path: target.as_ref().into(),
         })
     }
 
