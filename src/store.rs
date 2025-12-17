@@ -23,8 +23,8 @@
 //! the cluster definition file.
 
 use crate::{
-    config::ClusterDefinition,
     cluster::{Cluster, ClusterAccess, Git2Cluster},
+    config::ClusterDefinition,
 };
 
 use futures::future::join_all;
@@ -119,13 +119,33 @@ impl Store {
         Ok(store)
     }
 
-    pub fn init_cluster(&self, name: impl Into<String>, definition: ClusterDefinition) -> Result<()> {
+    pub fn init_cluster(
+        &self,
+        name: impl Into<String>,
+        definition: ClusterDefinition,
+    ) -> Result<()> {
         let mut state = self.lock_state();
         let name = name.into();
         let path = state.store_path.join(&name).join(".git");
-        state.clusters.insert(name.into(), Git2Cluster::try_init(path, definition)?);
+        state
+            .clusters
+            .insert(name, Git2Cluster::try_init(path, definition)?);
 
         Ok(())
+    }
+
+    pub fn remove_cluster(&self, name: impl AsRef<str>) -> Result<Cluster> {
+        let mut state = self.lock_state();
+        let removed =
+            state
+                .clusters
+                .remove(name.as_ref())
+                .ok_or(ClusterStoreError::ClusterNotFound {
+                    name: name.as_ref().to_string(),
+                })?;
+        removed.undeploy_all()?;
+
+        Ok(removed)
     }
 
     pub async fn clone_cluster(
