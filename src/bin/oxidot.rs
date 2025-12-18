@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: 2025 Jason Pena <jasonpena@awkless.com>
 // SPDX-License-Identifier: MIT
 
-use oxidot::{path::default_cluster_store_dir, store::Store};
+use oxidot::{
+    config::{ClusterDefinition, WorkTreeAlias},
+    path::{default_cluster_store_dir, home_dir},
+    store::Store,
+};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -28,7 +32,7 @@ impl Cli {
             Command::Clone(opts) => run_clone(opts).await,
             Command::Deploy(opts) => run_deploy(opts),
             Command::Undeploy(opts) => run_undeploy(opts),
-            Command::List(opts) => run_list(opts),
+            Command::Status(opts) => run_status(opts),
             Command::Remove(opts) => run_remove(opts),
             Command::Git(opts) => run_git(opts),
         }
@@ -53,9 +57,9 @@ enum Command {
     #[command(override_usage = "oxidot undeploy [options] <cluster_name> [<sparsity_rules>]...")]
     Undeploy(UndeployOptions),
 
-    /// List status information about cluster store.
+    /// Show status information about cluster store.
     #[command(override_usage = "oxidot list [options]")]
-    List(ListOptions),
+    Status(StatusOptions),
 
     /// Remove cluster from cluster store.
     #[command(override_usage = "oxidot remove [options] <cluster_name>")]
@@ -140,7 +144,7 @@ struct UndeployOptions {
 
 #[derive(Parser, Clone, Debug)]
 #[command(author, about, long_about)]
-struct ListOptions {
+struct StatusOptions {
     /// List current sparsity rules of target cluster.
     #[arg(group = "target", short, long, value_name = "cluster_name")]
     pub sparsity_rules: Option<String>,
@@ -162,7 +166,7 @@ struct ListOptions {
 struct RemoveOptions {
     /// Name of cluster to remove from cluster store.
     #[arg(required = true, value_name = "cluster_name")]
-    pub cluster_name: Vec<String>,
+    pub cluster_names: Vec<String>,
 }
 
 #[tokio::main]
@@ -192,8 +196,25 @@ async fn run() -> Result<()> {
     Cli::parse().run().await
 }
 
-fn run_init(__opts: InitOptions) -> Result<()> {
-    todo!();
+fn run_init(opts: InitOptions) -> Result<()> {
+    let mut definition = ClusterDefinition::default();
+    definition.settings.description = match opts.description {
+        Some(description) => description,
+        None => "<put one sentence description here>".into(),
+    };
+    definition.settings.url = match opts.url {
+        Some(url) => url,
+        None => "<put url to remote here>".into(),
+    };
+    definition.settings.work_tree_alias = match opts.work_tree_alias {
+        Some(path) => WorkTreeAlias::new(path),
+        None => WorkTreeAlias::new(home_dir()?),
+    };
+
+    let store = Store::open(default_cluster_store_dir()?)?;
+    store.init_cluster(opts.cluster_name, definition)?;
+
+    Ok(())
 }
 
 async fn run_clone(opts: CloneOptions) -> Result<()> {
@@ -203,20 +224,64 @@ async fn run_clone(opts: CloneOptions) -> Result<()> {
     Ok(())
 }
 
-fn run_deploy(_opts: DeployOptions) -> Result<()> {
-    todo!();
+fn run_deploy(opts: DeployOptions) -> Result<()> {
+    let store = Store::open(default_cluster_store_dir()?)?;
+    store.use_cluster(opts.cluster_name, |cluster| {
+        if opts.all {
+            cluster.deploy_all()?;
+        } else if opts.default {
+            cluster.deploy_default_rules()?;
+        } else {
+            cluster.deploy_with_rules(opts.sparsity_rules)?;
+        }
+
+        Ok(())
+    })?;
+
+    Ok(())
 }
 
-fn run_undeploy(_opts: UndeployOptions) -> Result<()> {
-    todo!();
+fn run_undeploy(opts: UndeployOptions) -> Result<()> {
+    let store = Store::open(default_cluster_store_dir()?)?;
+    store.use_cluster(opts.cluster_name, |cluster| {
+        if opts.all {
+            cluster.undeploy_all()?;
+        } else if opts.default {
+            cluster.undeploy_default_rules()?;
+        } else {
+            cluster.undeploy_with_rules(opts.sparsity_rules)?;
+        }
+
+        Ok(())
+    })?;
+
+    Ok(())
 }
 
-fn run_list(_opts: ListOptions) -> Result<()> {
-    todo!();
+fn run_status(opts: StatusOptions) -> Result<()> {
+    let store = Store::open(default_cluster_store_dir()?)?;
+    if let Some(cluster_name) = opts.sparsity_rules {
+        store.tracked_files_status(cluster_name)?;
+    } else if let Some(cluster_name) = opts.files {
+        store.deploy_rules_status(cluster_name)?;
+    } else if opts.deployed {
+        store.deployed_only_status();
+    } else if opts.undeployed {
+        store.undeployed_only_status();
+    } else {
+        store.detailed_status();
+    }
+
+    Ok(())
 }
 
-fn run_remove(_opts: RemoveOptions) -> Result<()> {
-    todo!();
+fn run_remove(opts: RemoveOptions) -> Result<()> {
+    let store = Store::open(default_cluster_store_dir()?)?;
+    for cluster_name in opts.cluster_names {
+        store.remove_cluster(cluster_name)?;
+    }
+
+    Ok(())
 }
 
 fn run_git(opts: Vec<OsString>) -> Result<()> {
