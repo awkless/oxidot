@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2025 Jason Pena <jasonpena@awkless.com>
+// SPDX-FileCopyrightText: 2024-2025 Eric Urban <hydrogen18@gmail.com>
 // SPDX-License-Identifier: MIT
 
 //! Cluster deployment logic.
@@ -707,4 +708,4 @@ pub enum Error {
 }
 
 /// Friendly result alias :3
-type Result<T, E = Error> = std::result::Result<T, E>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
