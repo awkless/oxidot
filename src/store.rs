@@ -34,7 +34,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
-use tracing::{instrument, warn, info};
+use tracing::{info, instrument, warn};
 
 #[derive(Debug)]
 pub(crate) struct StoreState {
@@ -226,8 +226,14 @@ impl Store {
             };
 
             let data = format!(
-                "{} {} -> {}\n",
-                deployment, name, entry.definition.settings.work_tree_alias,
+                "{} {} -> {} : {}\n  url: {}\n  include: {:#?}\n  dependencies: {:#?}\n",
+                deployment,
+                name,
+                entry.definition.settings.work_tree_alias,
+                entry.definition.settings.description,
+                entry.definition.settings.url,
+                entry.definition.settings.include,
+                entry.definition.dependencies,
             );
             status.push_str(data.as_str());
         }
@@ -247,8 +253,13 @@ impl Store {
         for (name, entry) in state.clusters.iter() {
             if entry.is_deployed() {
                 let data = format!(
-                    "{} -> {}\n",
-                    name, entry.definition.settings.work_tree_alias,
+                    "{} -> {} : {}\n  url: {}\n  include: {:#?}\n  dependencies: {:#?}\n",
+                    name,
+                    entry.definition.settings.work_tree_alias,
+                    entry.definition.settings.description,
+                    entry.definition.settings.url,
+                    entry.definition.settings.include,
+                    entry.definition.dependencies,
                 );
                 status.push_str(data.as_str());
             }
