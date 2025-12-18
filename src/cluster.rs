@@ -74,7 +74,11 @@ use auth_git2::{GitAuthenticator, Prompter};
 use git2::{build::RepoBuilder, Config, FetchOptions, RemoteCallbacks, Repository};
 use indicatif::{ProgressBar, ProgressStyle};
 use inquire::{Password, Text};
-use std::{ffi::OsString, path::{PathBuf, Path}, time};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    time,
+};
 use tracing::{debug, info, instrument, warn};
 
 /// A basic cluster.
