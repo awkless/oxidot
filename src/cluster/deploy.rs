@@ -529,7 +529,7 @@ impl Deployment for Git2Deployer {
     ///
     /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
     fn list_tracked_files(&self) -> Result<Vec<PathBuf>> {
-        Ok(self.list_file_paths()?)
+        self.list_file_paths()
     }
 
     /// Check if cluster has deployed tracked files to work tree alias.
