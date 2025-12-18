@@ -29,7 +29,7 @@ use std::{
 /// be configured. The dependencies section lists all dependencies that should
 /// be deployed along with the cluster itself. In other words, clusters can
 /// list other clusters as dependencies.
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Hash, Deserialize, Serialize)]
 pub struct ClusterDefinition {
     /// Settings for the cluster.
     pub settings: ClusterSettings,
@@ -70,7 +70,7 @@ impl Display for ClusterDefinition {
 /// Cluster configuration settings.
 ///
 /// Standard settings to use for any given cluster.
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Hash, Deserialize, Serialize)]
 pub struct ClusterSettings {
     /// Brief description of what the cluster contains.
     pub description: String,
@@ -88,7 +88,7 @@ pub struct ClusterSettings {
 /// Cluster dependency listing.
 ///
 /// List of other clusters to use as dependencies for given cluster.
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Hash, Deserialize, Serialize)]
 pub struct ClusterDependency {
     /// Name of the cluster dependency.
     pub name: String,
@@ -101,7 +101,7 @@ pub struct ClusterDependency {
 }
 
 /// Path acting as the work tree alias for given cluster.
-#[derive(Default, Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Hash, Deserialize, Serialize)]
 pub struct WorkTreeAlias(PathBuf);
 
 impl WorkTreeAlias {
