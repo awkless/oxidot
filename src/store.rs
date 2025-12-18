@@ -162,7 +162,7 @@ impl Store {
             let bar = multi_bar.add(ProgressBar::no_length());
             bars.push(bar.clone());
 
-            let cluster = Git2Cluster::try_clone(&url, &path, branch.clone(), bar)?;
+            let cluster = Git2Cluster::try_clone(&url, &path, branch, bar)?;
             let unresolved = state.find_unresolved_dependencies(&cluster.definition)?;
             state.clusters.insert(name.clone(), cluster);
 
@@ -174,15 +174,21 @@ impl Store {
             .for_each_concurrent(None, |dep| {
                 let results = results.clone();
                 let store_path = store_path.clone();
-                let branch = branch.clone();
                 let bar = multi_bar.add(ProgressBar::no_length());
                 bars.push(bar.clone());
 
                 async move {
                     let result = tokio::spawn(async move {
                         let path = store_path.join(format!("{}.git", &dep.name));
-                        let cluster = Git2Cluster::try_clone(&dep.url, &path, branch, bar.clone())?;
+                        let dep_branch = if let Some(branch) = dep.remote.branch.clone() {
+                            BranchTarget::Target(branch)
+                        } else {
+                            BranchTarget::Default
+                        };
+
+                        let cluster = Git2Cluster::try_clone(&dep.remote.url, &path, dep_branch, bar.clone())?;
                         bar.finish();
+
                         Ok::<_, Error>((dep.name.clone(), cluster))
                     })
                     .await;
@@ -269,7 +275,7 @@ impl Store {
                 name,
                 entry.definition.settings.work_tree_alias,
                 entry.definition.settings.description,
-                entry.definition.settings.url,
+                entry.definition.settings.remote.url,
                 entry.definition.settings.include,
                 entry.definition.dependencies,
             );
@@ -306,7 +312,7 @@ impl Store {
                     name,
                     entry.definition.settings.work_tree_alias,
                     entry.definition.settings.description,
-                    entry.definition.settings.url,
+                    entry.definition.settings.remote.url,
                     entry.definition.settings.include,
                     entry.definition.dependencies,
                 );
@@ -344,7 +350,7 @@ impl Store {
                     name,
                     entry.definition.settings.work_tree_alias,
                     entry.definition.settings.description,
-                    entry.definition.settings.url,
+                    entry.definition.settings.remote.url,
                     entry.definition.settings.include,
                     entry.definition.dependencies,
                 );

@@ -86,6 +86,10 @@ struct InitOptions {
     #[arg(short, long, value_name = "url")]
     pub url: Option<String>,
 
+    /// Target branch to use instead of the default branch.
+    #[arg(short, long, value_name = "branch")]
+    pub branch: Option<String>,
+
     /// Path to work tree alias.
     #[arg(short, long, value_name = "path")]
     pub work_tree_alias: Option<PathBuf>,
@@ -207,9 +211,13 @@ fn run_init(opts: InitOptions) -> Result<()> {
         Some(description) => description,
         None => "<put one sentence description here>".into(),
     };
-    definition.settings.url = match opts.url {
+    definition.settings.remote.url = match opts.url {
         Some(url) => url,
         None => "<put url to remote here>".into(),
+    };
+    definition.settings.remote.branch = match opts.branch {
+        Some(branch) => Some(branch),
+        None => None,
     };
     definition.settings.work_tree_alias = match opts.work_tree_alias {
         Some(path) => WorkTreeAlias::new(path),

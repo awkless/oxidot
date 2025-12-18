@@ -75,8 +75,8 @@ pub struct ClusterSettings {
     /// Brief description of what the cluster contains.
     pub description: String,
 
-    /// Remove URL to clone cluster from.
-    pub url: String,
+    /// Remote repository settings for cloning.
+    pub remote: ClusterRemote,
 
     /// Work tree alias to use for deployment.
     pub work_tree_alias: WorkTreeAlias,
@@ -94,10 +94,22 @@ pub struct ClusterDependency {
     pub name: String,
 
     /// Remote URL to clone cluster from if it isn't in the cluster store.
-    pub url: String,
+    pub remote: ClusterRemote,
 
     /// Additional listing of file content to deploy.
     pub include: Option<Vec<String>>,
+}
+
+/// Cluster remote settings.
+///
+/// Where and how to clone a given cluster target.
+#[derive(Default, Debug, PartialEq, Eq, Clone, Hash, Deserialize, Serialize)]
+pub struct ClusterRemote {
+    /// Remote URL to use for cloning.
+    pub url: String,
+
+    /// Branch to use for cloning.
+    pub branch: Option<String>,
 }
 
 /// Path acting as the work tree alias for given cluster.
