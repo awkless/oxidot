@@ -36,58 +36,7 @@ use std::{
 };
 use tracing::{info, instrument, warn};
 
-#[derive(Debug)]
-pub(crate) struct StoreState {
-    pub(crate) store_path: PathBuf,
-    pub(crate) clusters: HashMap<String, Cluster>,
-}
-
-impl StoreState {
-    pub(crate) fn new(store_path: impl Into<PathBuf>, clusters: HashMap<String, Cluster>) -> Self {
-        Self {
-            store_path: store_path.into(),
-            clusters,
-        }
-    }
-
-    pub(crate) fn find_unresolved_dependencies(
-        &self,
-        parent: &ClusterDefinition,
-    ) -> Result<Vec<ClusterDependency>> {
-        let mut unresolved = Vec::new();
-        let mut visited = HashSet::new();
-        let mut stack = VecDeque::new();
-
-        if let Some(dependencies) = &parent.dependencies {
-            if !dependencies.is_empty() {
-                stack.push_back(dependencies[0].clone());
-            }
-        } else {
-            return Ok(Vec::new());
-        }
-
-        while let Some(current) = stack.pop_back() {
-            if !visited.insert(current.clone()) {
-                continue;
-            }
-
-            if !self.clusters.contains_key(&current.name) {
-                unresolved.push(current.clone());
-            }
-
-            if let Some(cluster) = self.clusters.get(&current.name) {
-                if let Some(deps) = &cluster.definition.dependencies {
-                    for dep in deps {
-                        stack.push_back(dep.clone());
-                    }
-                }
-            }
-        }
-
-        Ok(unresolved)
-    }
-}
-
+/// Cluster store handler.
 #[derive(Debug)]
 pub struct Store {
     state: Arc<Mutex<StoreState>>,
@@ -105,7 +54,7 @@ impl Store {
     ///   globbed.
     /// - Return [`ClusterStoreError::GlobPattern`] if glob pattern for cluster
     ///   entry is invalid.
-    /// - Return [`ClusterStoreError::ClusterError`] if any cluster entry
+    /// - Return [`ClusterStoreError::Cluster`] if any cluster entry
     ///   cannot be opened.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         mkdirp::mkdirp(path.as_ref())?;
@@ -132,6 +81,15 @@ impl Store {
         Ok(store)
     }
 
+    /// Initialize new cluster into store.
+    ///
+    /// Takes a cluster definition to initialize a new cluster with it inside
+    /// of the cluster store.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterStoreError::Cluster`] if cluster cannot be
+    ///   initialized.
     pub fn init_cluster(
         &self,
         name: impl Into<String>,
@@ -147,6 +105,19 @@ impl Store {
         Ok(())
     }
 
+    /// Remove cluster from store.
+    ///
+    /// Undeploys the target cluster, and removes it from the cluster store in
+    /// full.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterStoreError::Cluster`] if cluster cannot be
+    ///   initialized.
+    /// - Return [`ClusterStoreError::ClusterNotFound`] if cluster does not
+    ///   exist.
+    /// - Return [`ClusterStoreError::Io`] if cluster could not be deleted
+    ///   from cluster store.
     pub fn remove_cluster(&self, name: impl AsRef<str>) -> Result<Cluster> {
         let mut state = self.lock_state();
         let removed =
@@ -161,6 +132,20 @@ impl Store {
         Ok(removed)
     }
 
+    /// Clone a cluster along with its dependencies.
+    ///
+    /// Clones target cluster, and performs dependency resolution by looking
+    /// for missing dependencies and cloning them into the store as well. The
+    /// dependency resolution is done concurrently.
+    ///
+    /// The current progress of dependency cloning is shown via interactive
+    /// progress bars that can prompt the user for credentials if need be
+    /// during the cloning process.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterStoreError::Cluster`] if cluster cannot be
+    ///   initialized.
     pub async fn clone_cluster(
         &self,
         name: impl Into<String>,
@@ -225,6 +210,16 @@ impl Store {
         Ok(())
     }
 
+    /// Use target cluster for stuff.
+    ///
+    /// Finds target cluster in store, and uses the clouser to perform some
+    /// kind of action with it.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterStoreError::ClusterNotFound`] if cluster does not
+    ///   exist.
+    /// - Fails if clouser also fails for whatever reason.
     pub fn use_cluster<C, R>(&self, name: impl AsRef<str>, usage: C) -> Result<R>
     where
         C: FnOnce(&Cluster) -> Result<R>,
@@ -241,6 +236,17 @@ impl Store {
         usage(cluster)
     }
 
+    /// Give detailed status information about cluster store.
+    ///
+    /// Prints the following information:
+    ///
+    /// - Deployment status.
+    /// - Cluster name.
+    /// - Cluster work tree alias
+    /// - Cluster description.
+    /// - Cluster remote URL.
+    /// - Default deployment rules.
+    /// - Dependencies of the cluster.
     #[instrument(skip(self), level = "debug")]
     pub fn detailed_status(&self) {
         let state = self.lock_state();
@@ -273,6 +279,17 @@ impl Store {
         info!("all avaliable clusters:\n{}", status);
     }
 
+    /// Give status information for deployed clusters only.
+    ///
+    /// Prints the following information:
+    ///
+    /// - Deployment status.
+    /// - Cluster name.
+    /// - Cluster work tree alias
+    /// - Cluster description.
+    /// - Cluster remote URL.
+    /// - Default deployment rules.
+    /// - Dependencies of the cluster.
     #[instrument(skip(self), level = "debug")]
     pub fn deployed_only_status(&self) {
         let state = self.lock_state();
@@ -300,6 +317,17 @@ impl Store {
         info!("all deployed clusters:\n{}", status);
     }
 
+    /// Give status information of undeployed clusters only.
+    ///
+    /// Prints the following information:
+    ///
+    /// - Deployment status.
+    /// - Cluster name.
+    /// - Cluster work tree alias
+    /// - Cluster description.
+    /// - Cluster remote URL.
+    /// - Default deployment rules.
+    /// - Dependencies of the cluster.
     #[instrument(skip(self), level = "debug")]
     pub fn undeployed_only_status(&self) {
         let state = self.lock_state();
@@ -327,6 +355,12 @@ impl Store {
         info!("all deployed clusters:\n{}", status);
     }
 
+    /// Show current deployment rules for target cluster.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterStoreError::Cluster`] if sparse checkout configuration
+    ///   file could not be opened to get rule set.
     #[instrument(skip(self, name), level = "debug")]
     pub fn deploy_rules_status(&self, name: impl AsRef<str>) -> Result<()> {
         self.use_cluster(name.as_ref(), |cluster| {
@@ -343,6 +377,12 @@ impl Store {
         Ok(())
     }
 
+    /// Give listing of currently tracked files for target cluster.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterStoreError::Cluster`] if paths could not be obtained
+    ///   from cluster's index.
     #[instrument(skip(self, name), level = "debug")]
     pub fn tracked_files_status(&self, name: impl AsRef<str>) -> Result<()> {
         self.use_cluster(name.as_ref(), |cluster| {
@@ -365,24 +405,82 @@ impl Store {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct StoreState {
+    pub(crate) store_path: PathBuf,
+    pub(crate) clusters: HashMap<String, Cluster>,
+}
+
+impl StoreState {
+    pub(crate) fn new(store_path: impl Into<PathBuf>, clusters: HashMap<String, Cluster>) -> Self {
+        Self {
+            store_path: store_path.into(),
+            clusters,
+        }
+    }
+
+    pub(crate) fn find_unresolved_dependencies(
+        &self,
+        parent: &ClusterDefinition,
+    ) -> Result<Vec<ClusterDependency>> {
+        let mut unresolved = Vec::new();
+        let mut visited = HashSet::new();
+        let mut stack = VecDeque::new();
+
+        if let Some(dependencies) = &parent.dependencies {
+            if !dependencies.is_empty() {
+                stack.push_back(dependencies[0].clone());
+            }
+        } else {
+            return Ok(Vec::new());
+        }
+
+        while let Some(current) = stack.pop_back() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+
+            if !self.clusters.contains_key(&current.name) {
+                unresolved.push(current.clone());
+            }
+
+            if let Some(cluster) = self.clusters.get(&current.name) {
+                if let Some(deps) = &cluster.definition.dependencies {
+                    for dep in deps {
+                        stack.push_back(dep.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(unresolved)
+    }
+}
+
 /// All possible error types for cluster store interaction.
 #[derive(Debug, thiserror::Error)]
 pub enum ClusterStoreError {
+    /// Cluster does not existing in cluster store for some reason.
     #[error("cluster {name:?} not found in cluster store")]
     ClusterNotFound { name: String },
 
+    /// Failed to use glob patterns for directory processing.
     #[error(transparent)]
     Glob(#[from] glob::GlobError),
 
+    /// Glob pattern was not parsed correctly for some reason.
     #[error(transparent)]
     GlobPattern(#[from] glob::PatternError),
 
+    /// Cluster domain and deployment logic fails for some reason.
     #[error(transparent)]
     Cluster(#[from] crate::cluster::ClusterError),
 
+    /// Threads failed to properly join to main thread.
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
 
+    /// Input/Output operations failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

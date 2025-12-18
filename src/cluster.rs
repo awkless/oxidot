@@ -115,7 +115,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn deploy_with_rules(
         &self,
         rules: impl IntoIterator<Item = impl Into<String>>,
@@ -132,7 +132,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn undeploy_with_rules(
         &self,
         rules: impl IntoIterator<Item = impl AsRef<str>>,
@@ -150,7 +150,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn deploy_default_rules(&self) -> Result<()> {
         let work_tree_alias = &self.definition.settings.work_tree_alias;
         if let Some(default) = &self.definition.settings.include {
@@ -169,7 +169,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn undeploy_default_rules(&self) -> Result<()> {
         let work_tree_alias = &self.definition.settings.work_tree_alias;
         if let Some(default) = &self.definition.settings.include {
@@ -187,7 +187,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn deploy_all(&self) -> Result<()> {
         Ok(self
             .deployer
@@ -215,7 +215,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn list_deploy_rules(&self) -> Result<Vec<String>> {
         Ok(self.deployer.list_deploy_rules()?)
     }
@@ -224,7 +224,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn list_tracked_files(&self) -> Result<Vec<PathBuf>> {
         Ok(self.deployer.list_tracked_files()?)
     }
@@ -252,7 +252,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn gitcall_interactive(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -270,7 +270,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     pub fn gitcall_non_interactive(
         &self,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -307,7 +307,7 @@ impl ClusterAccess for Git2Cluster {
     /// # Errors
     ///
     /// - Return [`ClusterError::Git2`] if libgit2 operations fail.
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     #[instrument(skip(path, definition), level = "debug")]
     fn try_init(path: impl AsRef<Path>, definition: ClusterDefinition) -> Result<Cluster> {
         info!("initialize new cluster: {:?}", path.as_ref().display());
@@ -343,7 +343,7 @@ impl ClusterAccess for Git2Cluster {
     ///
     /// - Return [`ClusterError::Git2`] if libgit2 operations fail.
     /// - Return [`ClusterError::Config`] if cluster definition parsing fails.
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     #[instrument(skip(path), level = "debug")]
     fn try_open(path: impl AsRef<Path>) -> Result<Cluster> {
         debug!("open cluster: {:?}", path.as_ref().display());
@@ -374,7 +374,7 @@ impl ClusterAccess for Git2Cluster {
     ///
     /// - Return [`ClusterError::Git2`] if libgit2 operations fail.
     /// - Return [`ClusterError::Config`] if cluster definition parsing fails.
-    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    /// - Return [`ClusterError::Deployment`] if deployment logic fails.
     fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar) -> Result<Cluster> {
         let style = ProgressStyle::with_template(
             "{elapsed_precise:.green}  {msg:<50}  [{wide_bar:.yellow/blue}]",
