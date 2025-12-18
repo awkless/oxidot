@@ -295,6 +295,18 @@ impl Store {
         info!("all deployed clusters:\n{}", status);
     }
 
+    #[instrument(skip(self, name), level = "debug")]
+    pub fn deploy_rules_status(&self, name: impl AsRef<str>) -> Result<()> {
+        self.use_cluster(name.as_ref(), |cluster| {
+            let rule_set = cluster.list_deploy_rules()?;
+            info!("current deploy rules for {}:\n  {:#?}", name.as_ref(), rule_set);
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
     #[inline]
     fn lock_state(&self) -> MutexGuard<'_, StoreState> {
         self.state.lock().unwrap()
