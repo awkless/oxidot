@@ -64,6 +64,9 @@ pub trait Deployment {
     /// List current deployment rules.
     fn list_deploy_rules(&self) -> Result<Vec<String>>;
 
+    /// List currently tracked files of cluster.
+    fn list_tracked_files(&self) -> Result<Vec<PathBuf>>;
+
     /// Check if cluster has deployed any tracked files to work tree alias.
     fn is_deployed(&self, work_tree_alias: &WorkTreeAlias) -> bool;
 
@@ -515,8 +518,18 @@ impl Deployment for Git2Deployer {
     /// # Errors
     ///
     /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`DeployError::Git2`] if cluster index operations fail.
     fn list_deploy_rules(&self) -> Result<Vec<String>> {
         Ok(self.sparsity.current_rules()?)
+    }
+
+    /// List currently tracked files of cluster.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
+    fn list_tracked_files(&self) -> Result<Vec<PathBuf>> {
+        Ok(self.list_file_paths()?)
     }
 
     /// Check if cluster has deployed tracked files to work tree alias.

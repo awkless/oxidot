@@ -74,7 +74,7 @@ use auth_git2::{GitAuthenticator, Prompter};
 use git2::{build::RepoBuilder, Config, FetchOptions, RemoteCallbacks, Repository};
 use indicatif::{ProgressBar, ProgressStyle};
 use inquire::{Password, Text};
-use std::{ffi::OsString, path::Path, time};
+use std::{ffi::OsString, path::{PathBuf, Path}, time};
 use tracing::{debug, info, instrument, warn};
 
 /// A basic cluster.
@@ -214,6 +214,15 @@ where
     /// - Return [`ClusterError::Deploy`] if deployment logic fails.
     pub fn list_deploy_rules(&self) -> Result<Vec<String>> {
         Ok(self.deployer.list_deploy_rules()?)
+    }
+
+    /// List currently tracked files of cluster.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`ClusterError::Deploy`] if deployment logic fails.
+    pub fn list_tracked_files(&self) -> Result<Vec<PathBuf>> {
+        Ok(self.deployer.list_tracked_files()?)
     }
 
     /// Check if cluster has deployed tracked files to work tree alias.
