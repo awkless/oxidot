@@ -24,10 +24,10 @@
 
 use crate::{
     cluster::{Cluster, ClusterAccess, Git2Cluster},
-    config::ClusterDefinition,
+    config::{ClusterDefinition, ClusterDependency},
 };
 
-use futures::future::join_all;
+use futures::{stream, StreamExt};
 use indicatif::{MultiProgress, ProgressBar};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -50,25 +50,35 @@ impl StoreState {
         }
     }
 
-    pub(crate) fn find_unresolved_dependencies(&self, parent: &str) -> Result<Vec<String>> {
+    pub(crate) fn find_unresolved_dependencies(
+        &self,
+        parent: &ClusterDefinition,
+    ) -> Result<Vec<ClusterDependency>> {
         let mut unresolved = Vec::new();
         let mut visited = HashSet::new();
         let mut stack = VecDeque::new();
-        stack.push_back(parent.to_string());
+
+        if let Some(dependencies) = &parent.dependencies {
+            if !dependencies.is_empty() {
+                stack.push_back(dependencies[0].clone());
+            }
+        } else {
+            return Ok(Vec::new());
+        }
 
         while let Some(current) = stack.pop_back() {
             if !visited.insert(current.clone()) {
                 continue;
             }
 
-            if !self.clusters.contains_key(&current) {
+            if !self.clusters.contains_key(&current.name) {
                 unresolved.push(current.clone());
             }
 
-            if let Some(cluster) = self.clusters.get(&current) {
+            if let Some(cluster) = self.clusters.get(&current.name) {
                 if let Some(deps) = &cluster.definition.dependencies {
                     for dep in deps {
-                        stack.push_back(dep.name.clone());
+                        stack.push_back(dep.clone());
                     }
                 }
             }
@@ -98,6 +108,8 @@ impl Store {
     /// - Return [`ClusterStoreError::ClusterError`] if any cluster entry
     ///   cannot be opened.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        mkdirp::mkdirp(path.as_ref())?;
+
         let store = Self {
             state: Arc::new(Mutex::new(StoreState::new(path.as_ref(), HashMap::new()))),
         };
@@ -127,7 +139,7 @@ impl Store {
     ) -> Result<()> {
         let mut state = self.lock_state();
         let name = name.into();
-        let path = state.store_path.join(&name).join(".git");
+        let path = state.store_path.join(format!("{}.git", &name));
         state
             .clusters
             .insert(name, Git2Cluster::try_init(path, definition)?);
@@ -156,37 +168,57 @@ impl Store {
     ) -> Result<()> {
         let name = name.into();
         let url = url.into();
+        let multi_bar = MultiProgress::new();
+        let mut bars = Vec::new();
 
         let (store_path, unresolved) = {
             let mut state = self.lock_state();
+            let path = state.store_path.join(format!("{}.git", &name));
+            let bar = multi_bar.add(ProgressBar::no_length());
+            bars.push(bar.clone());
 
-            let path = state.store_path.join(&name).join(".git");
-            let bars = MultiProgress::new();
-            let bar = bars.add(ProgressBar::no_length());
-
-            let cluster = Git2Cluster::try_clone(&url, &path, bar.clone())?;
-            bar.finish();
+            let cluster = Git2Cluster::try_clone(&url, &path, bar)?;
+            let unresolved = state.find_unresolved_dependencies(&cluster.definition)?;
             state.clusters.insert(name.clone(), cluster);
 
-            let unresolved = state.find_unresolved_dependencies(&name)?;
             (state.store_path.clone(), unresolved)
         };
 
-        let tasks = unresolved.into_iter().map(|dep| {
-            let store_path = store_path.clone();
-            let url = url.clone();
-            tokio::task::spawn_blocking(move || {
-                let path = store_path.join(&dep).join(".git");
-                let bar = ProgressBar::no_length();
-                let cluster = Git2Cluster::try_clone(&url, &path, bar)?;
-                Ok::<_, ClusterStoreError>((dep, cluster))
-            })
-        });
+        let results = Arc::new(Mutex::new(Vec::new()));
+        stream::iter(unresolved)
+            .for_each_concurrent(None, |dep| {
+                let results = results.clone();
+                let store_path = store_path.clone();
+                let bar = multi_bar.add(ProgressBar::no_length());
+                bars.push(bar.clone());
 
-        let results = join_all(tasks).await;
+                async move {
+                    let result = tokio::spawn(async move {
+                        let path = store_path.join(format!("{}.git", &dep.name));
+                        let cluster = Git2Cluster::try_clone(&dep.url, &path, bar.clone())?;
+                        bar.finish();
+                        Ok::<_, ClusterStoreError>((dep.name.clone(), cluster))
+                    })
+                    .await;
+                    let mut results = results.lock().unwrap();
+                    results.push(result);
+                    drop(results);
+                }
+            })
+            .await;
+
+        for bar in bars {
+            bar.finish();
+        }
+
+        let results = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
+        let clusters = results
+            .into_iter()
+            .flatten()
+            .collect::<Result<Vec<_>, _>>()?;
+
         let mut state = self.lock_state();
-        for result in results {
-            let (name, cluster) = result??;
+        for (name, cluster) in clusters {
             state.clusters.insert(name, cluster);
         }
 
@@ -299,7 +331,11 @@ impl Store {
     pub fn deploy_rules_status(&self, name: impl AsRef<str>) -> Result<()> {
         self.use_cluster(name.as_ref(), |cluster| {
             let rule_set = cluster.list_deploy_rules()?;
-            info!("current deploy rules for {}:\n  {:#?}", name.as_ref(), rule_set);
+            info!(
+                "current deploy rules for {}:\n  {:#?}",
+                name.as_ref(),
+                rule_set
+            );
 
             Ok(())
         })?;
@@ -311,7 +347,11 @@ impl Store {
     pub fn tracked_files_status(&self, name: impl AsRef<str>) -> Result<()> {
         self.use_cluster(name.as_ref(), |cluster| {
             let files = cluster.list_tracked_files()?;
-            info!("current tracked files for {}:\n {:#?}", name.as_ref(), files);
+            info!(
+                "current tracked files for {}:\n {:#?}",
+                name.as_ref(),
+                files
+            );
 
             Ok(())
         })?;
@@ -342,6 +382,9 @@ pub enum ClusterStoreError {
 
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 /// Friendly result alias :3
