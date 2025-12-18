@@ -120,13 +120,12 @@ impl Store {
     ///   from cluster store.
     pub fn remove_cluster(&self, name: impl AsRef<str>) -> Result<Cluster> {
         let mut state = self.lock_state();
-        let removed =
-            state
-                .clusters
-                .remove(name.as_ref())
-                .ok_or(Error::ClusterNotFound {
-                    name: name.as_ref().to_string(),
-                })?;
+        let removed = state
+            .clusters
+            .remove(name.as_ref())
+            .ok_or(Error::ClusterNotFound {
+                name: name.as_ref().to_string(),
+            })?;
         removed.undeploy_all()?;
 
         Ok(removed)
@@ -225,13 +224,12 @@ impl Store {
         C: FnOnce(&Cluster) -> Result<R>,
     {
         let state = self.lock_state();
-        let cluster =
-            state
-                .clusters
-                .get(name.as_ref())
-                .ok_or(Error::ClusterNotFound {
-                    name: name.as_ref().into(),
-                })?;
+        let cluster = state
+            .clusters
+            .get(name.as_ref())
+            .ok_or(Error::ClusterNotFound {
+                name: name.as_ref().into(),
+            })?;
 
         usage(cluster)
     }

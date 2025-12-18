@@ -135,11 +135,10 @@ where
     where
         E: FnOnce(&mut SparsityEdit),
     {
-        let content =
-            read_to_string(&self.sparse_path).map_err(|err| Error::ReadSparseFile {
-                source: err,
-                sparse_path: self.sparse_path.clone(),
-            })?;
+        let content = read_to_string(&self.sparse_path).map_err(|err| Error::ReadSparseFile {
+            source: err,
+            sparse_path: self.sparse_path.clone(),
+        })?;
 
         let mut rules = SparsityEdit::from(content);
         editor(&mut rules);
