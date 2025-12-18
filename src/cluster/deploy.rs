@@ -103,7 +103,7 @@ impl Git2Deployer {
     ///
     /// # Error
     ///
-    /// - Return [`DeployError::Git2`] if configuration settings cannot be set
+    /// - Return [`Error::Git2`] if configuration settings cannot be set
     ///   for cluster.
     pub fn new(
         repository: Repository,
@@ -137,7 +137,7 @@ impl Git2Deployer {
         match config.get_entry(key) {
             Ok(entry) => Ok(entry.value().map(|v| v.to_string())),
             Err(err) if err.code() == git2::ErrorCode::NotFound => Ok(None),
-            Err(err) => Err(DeployError::Git2(err)),
+            Err(err) => Err(Error::Git2(err)),
         }
     }
 
@@ -171,7 +171,7 @@ impl Git2Deployer {
             }
         }
 
-        Err(DeployError::BlobNotFound {
+        Err(Error::BlobNotFound {
             path: target.as_ref().into(),
         })
     }
@@ -302,7 +302,7 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Git2`] if any libgit2 operations fail.
+    /// - Return [`Error::Git2`] if any libgit2 operations fail.
     fn cat_file(&self, path: impl AsRef<Path>) -> Result<String> {
         let blob = self.find_blob(path.as_ref())?;
 
@@ -317,7 +317,7 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Git2`] if any libgit2 operations fail.
+    /// - Return [`Error::Git2`] if any libgit2 operations fail.
     fn stage_and_commit(
         &self,
         filename: impl AsRef<Path>,
@@ -383,7 +383,7 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Git2`] if any libgit2 operations fail.
+    /// - Return [`Error::Git2`] if any libgit2 operations fail.
     fn is_empty(&self) -> bool {
         self.repository
             .head()
@@ -399,10 +399,10 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Syscall`] if changes to sparsity rule set fails
+    /// - Return [`Error::Syscall`] if changes to sparsity rule set fails
     ///   to be applied.
-    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
-    /// - Return [`DeployError::Git2`] if cluster index operations fail.
+    /// - Return [`Error::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`Error::Git2`] if cluster index operations fail.
     #[instrument(skip(self, work_tree_alias, rules), level = "debug")]
     fn deploy_with_rules(
         &self,
@@ -429,10 +429,10 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Syscall`] if changes to sparsity rule set fails
+    /// - Return [`Error::Syscall`] if changes to sparsity rule set fails
     ///   to be applied.
-    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
-    /// - Return [`DeployError::Git2`] if cluster index operations fail.
+    /// - Return [`Error::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`Error::Git2`] if cluster index operations fail.
     #[instrument(skip(self, work_tree_alias, rules), level = "debug")]
     fn undeploy_with_rules(
         &self,
@@ -459,10 +459,10 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Syscall`] if changes to sparsity rule set fails
+    /// - Return [`Error::Syscall`] if changes to sparsity rule set fails
     ///   to be applied.
-    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
-    /// - Return [`DeployError::Git2`] if cluster index operations fail.
+    /// - Return [`Error::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`Error::Git2`] if cluster index operations fail.
     #[instrument(skip(self), level = "debug")]
     fn deploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()> {
         info!("deploy all of {:?}", self.repository.path().display());
@@ -492,10 +492,10 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Syscall`] if changes to sparsity rule set fail
+    /// - Return [`Error::Syscall`] if changes to sparsity rule set fail
     ///   to be applied.
-    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
-    /// - Return [`DeployError::Git2`] if cluster index operations fail.
+    /// - Return [`Error::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`Error::Git2`] if cluster index operations fail.
     #[instrument(skip(self), level = "debug")]
     fn undeploy_all(&self, work_tree_alias: &WorkTreeAlias) -> Result<()> {
         if !self.is_deployed(work_tree_alias) {
@@ -517,8 +517,8 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
-    /// - Return [`DeployError::Git2`] if cluster index operations fail.
+    /// - Return [`Error::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`Error::Git2`] if cluster index operations fail.
     fn list_deploy_rules(&self) -> Result<Vec<String>> {
         Ok(self.sparsity.current_rules()?)
     }
@@ -527,7 +527,7 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Sparse`] if sparsity rule manipulation fails..
+    /// - Return [`Error::Sparse`] if sparsity rule manipulation fails..
     fn list_tracked_files(&self) -> Result<Vec<PathBuf>> {
         self.list_file_paths()
     }
@@ -579,9 +579,9 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Syscall`] if system call to Git fails, or Git
+    /// - Return [`Error::Syscall`] if system call to Git fails, or Git
     ///   itself fails.
-    /// - Return [`DeployError::Git2`] if any operation on the cluster's index
+    /// - Return [`Error::Git2`] if any operation on the cluster's index
     ///   fails.
     fn gitcall_interactive(
         &self,
@@ -609,9 +609,9 @@ impl Deployment for Git2Deployer {
     ///
     /// # Errors
     ///
-    /// - Return [`DeployError::Syscall`] if system call to Git fails, or Git
+    /// - Return [`Error::Syscall`] if system call to Git fails, or Git
     ///   itself fails.
-    /// - Return [`DeployError::Git2`] if any operation on the cluster's index
+    /// - Return [`Error::Git2`] if any operation on the cluster's index
     ///   fails.
     fn gitcall_non_interactive(
         &self,
@@ -628,7 +628,7 @@ fn syscall_interactive(
 ) -> Result<()> {
     let status = Command::new(cmd.as_ref()).args(args).spawn()?.wait()?;
     if !status.success() {
-        return Err(DeployError::Syscall(std::io::Error::other(format!(
+        return Err(Error::Syscall(std::io::Error::other(format!(
             "command {:?} failed",
             cmd.as_ref()
         ))));
@@ -662,7 +662,7 @@ fn syscall_non_interactive(
         .unwrap_or(message);
 
     if !output.status.success() {
-        return Err(DeployError::Syscall(std::io::Error::other(format!(
+        return Err(Error::Syscall(std::io::Error::other(format!(
             "command {:?} failed:\n{message}",
             cmd.as_ref()
         ))));
@@ -688,10 +688,10 @@ fn bytes_to_path(byts: &[u8]) -> PathBuf {
 
 /// Deployment logic error types.
 #[derive(Debug, thiserror::Error)]
-pub enum DeployError {
+pub enum Error {
     /// Sparse checkout configuration file manipulation fails.
     #[error(transparent)]
-    Sparse(#[from] crate::cluster::sparse::SparseError),
+    Sparse(#[from] crate::cluster::sparse::Error),
 
     /// Target blob in cluster's index cannot be found.
     #[error("cannot find file blob for {:?}", path.display())]
@@ -707,4 +707,4 @@ pub enum DeployError {
 }
 
 /// Friendly result alias :3
-type Result<T, E = DeployError> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;

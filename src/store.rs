@@ -50,11 +50,11 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterStoreError::Glob`] if cluster entry paths cannot be
+    /// - Return [`Error::Glob`] if cluster entry paths cannot be
     ///   globbed.
-    /// - Return [`ClusterStoreError::GlobPattern`] if glob pattern for cluster
+    /// - Return [`Error::GlobPattern`] if glob pattern for cluster
     ///   entry is invalid.
-    /// - Return [`ClusterStoreError::Cluster`] if any cluster entry
+    /// - Return [`Error::Cluster`] if any cluster entry
     ///   cannot be opened.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         mkdirp::mkdirp(path.as_ref())?;
@@ -88,7 +88,7 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterStoreError::Cluster`] if cluster cannot be
+    /// - Return [`Error::Cluster`] if cluster cannot be
     ///   initialized.
     pub fn init_cluster(
         &self,
@@ -112,11 +112,11 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterStoreError::Cluster`] if cluster cannot be
+    /// - Return [`Error::Cluster`] if cluster cannot be
     ///   initialized.
-    /// - Return [`ClusterStoreError::ClusterNotFound`] if cluster does not
+    /// - Return [`Error::ClusterNotFound`] if cluster does not
     ///   exist.
-    /// - Return [`ClusterStoreError::Io`] if cluster could not be deleted
+    /// - Return [`Error::Io`] if cluster could not be deleted
     ///   from cluster store.
     pub fn remove_cluster(&self, name: impl AsRef<str>) -> Result<Cluster> {
         let mut state = self.lock_state();
@@ -124,7 +124,7 @@ impl Store {
             state
                 .clusters
                 .remove(name.as_ref())
-                .ok_or(ClusterStoreError::ClusterNotFound {
+                .ok_or(Error::ClusterNotFound {
                     name: name.as_ref().to_string(),
                 })?;
         removed.undeploy_all()?;
@@ -144,7 +144,7 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterStoreError::Cluster`] if cluster cannot be
+    /// - Return [`Error::Cluster`] if cluster cannot be
     ///   initialized.
     pub async fn clone_cluster(
         &self,
@@ -182,7 +182,7 @@ impl Store {
                         let path = store_path.join(format!("{}.git", &dep.name));
                         let cluster = Git2Cluster::try_clone(&dep.url, &path, bar.clone())?;
                         bar.finish();
-                        Ok::<_, ClusterStoreError>((dep.name.clone(), cluster))
+                        Ok::<_, Error>((dep.name.clone(), cluster))
                     })
                     .await;
                     let mut results = results.lock().unwrap();
@@ -217,7 +217,7 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterStoreError::ClusterNotFound`] if cluster does not
+    /// - Return [`Error::ClusterNotFound`] if cluster does not
     ///   exist.
     /// - Fails if clouser also fails for whatever reason.
     pub fn use_cluster<C, R>(&self, name: impl AsRef<str>, usage: C) -> Result<R>
@@ -229,7 +229,7 @@ impl Store {
             state
                 .clusters
                 .get(name.as_ref())
-                .ok_or(ClusterStoreError::ClusterNotFound {
+                .ok_or(Error::ClusterNotFound {
                     name: name.as_ref().into(),
                 })?;
 
@@ -359,7 +359,7 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterStoreError::Cluster`] if sparse checkout configuration
+    /// - Return [`Error::Cluster`] if sparse checkout configuration
     ///   file could not be opened to get rule set.
     #[instrument(skip(self, name), level = "debug")]
     pub fn deploy_rules_status(&self, name: impl AsRef<str>) -> Result<()> {
@@ -381,7 +381,7 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// - Return [`ClusterStoreError::Cluster`] if paths could not be obtained
+    /// - Return [`Error::Cluster`] if paths could not be obtained
     ///   from cluster's index.
     #[instrument(skip(self, name), level = "debug")]
     pub fn tracked_files_status(&self, name: impl AsRef<str>) -> Result<()> {
@@ -459,7 +459,7 @@ impl StoreState {
 
 /// All possible error types for cluster store interaction.
 #[derive(Debug, thiserror::Error)]
-pub enum ClusterStoreError {
+pub enum Error {
     /// Cluster does not existing in cluster store for some reason.
     #[error("cluster {name:?} not found in cluster store")]
     ClusterNotFound { name: String },
@@ -474,7 +474,7 @@ pub enum ClusterStoreError {
 
     /// Cluster domain and deployment logic fails for some reason.
     #[error(transparent)]
-    Cluster(#[from] crate::cluster::ClusterError),
+    Cluster(#[from] crate::cluster::Error),
 
     /// Threads failed to properly join to main thread.
     #[error(transparent)]
@@ -486,4 +486,4 @@ pub enum ClusterStoreError {
 }
 
 /// Friendly result alias :3
-type Result<T, E = ClusterStoreError> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;

@@ -40,16 +40,16 @@ pub struct ClusterDefinition {
 }
 
 impl FromStr for ClusterDefinition {
-    type Err = ConfigError;
+    type Err = Error;
 
     fn from_str(data: &str) -> Result<Self, Self::Err> {
         let mut definition: ClusterDefinition =
-            toml::de::from_str(data).map_err(ConfigError::Deserialize)?;
+            toml::de::from_str(data).map_err(Error::Deserialize)?;
 
         // INVARIANT: Perform shell expansion on work tree alias field.
         definition.settings.work_tree_alias = WorkTreeAlias::new(
             shellexpand::full(definition.settings.work_tree_alias.to_string().as_str())
-                .map_err(ConfigError::ShellExpansion)?
+                .map_err(Error::ShellExpansion)?
                 .into_owned(),
         );
 
@@ -61,7 +61,7 @@ impl Display for ClusterDefinition {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
         fmt.write_str(
             toml::ser::to_string_pretty(self)
-                .map_err(ConfigError::Serialize)?
+                .map_err(Error::Serialize)?
                 .as_str(),
         )
     }
@@ -153,7 +153,7 @@ impl From<PathBuf> for WorkTreeAlias {
 
 /// Configuration error types.
 #[derive(Clone, Debug, thiserror::Error)]
-pub enum ConfigError {
+pub enum Error {
     /// Failed to deserialize configuration.
     #[error(transparent)]
     Deserialize(#[from] toml::de::Error),
@@ -167,14 +167,14 @@ pub enum ConfigError {
     ShellExpansion(#[from] shellexpand::LookupError<std::env::VarError>),
 }
 
-impl From<ConfigError> for FmtError {
-    fn from(_: ConfigError) -> Self {
+impl From<Error> for FmtError {
+    fn from(_: Error) -> Self {
         FmtError
     }
 }
 
 /// Friendly result alias :3
-type Result<T, E = ConfigError> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[cfg(test)]
 mod tests {

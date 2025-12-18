@@ -97,7 +97,7 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`SparseError::CreateSparseFile`] if sparse Checkout
+    /// - Return [`Error::CreateSparseFile`] if sparse Checkout
     ///   configuration file cannot be created if missing.
     pub fn new(gitdir: impl Into<PathBuf>, matcher: M) -> Result<Self> {
         let sparse_path = gitdir.into().join("info").join("sparse-checkout");
@@ -108,7 +108,7 @@ where
             .write(true)
             .truncate(false)
             .open(&sparse_path)
-            .map_err(|err| SparseError::CreateSparseFile {
+            .map_err(|err| Error::CreateSparseFile {
                 source: err,
                 sparse_path: sparse_path.clone(),
             })?;
@@ -127,16 +127,16 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`SparseError::ReadSparseFile`] if sparse checkout
+    /// - Return [`Error::ReadSparseFile`] if sparse checkout
     ///   configuration file cannot be read.
-    /// - Return [`SparseError::WriteSparseFile`] if rules cannot be written to
+    /// - Return [`Error::WriteSparseFile`] if rules cannot be written to
     ///   sparse checkout configuration file.
     pub fn edit<E>(&self, editor: E) -> Result<()>
     where
         E: FnOnce(&mut SparsityEdit),
     {
         let content =
-            read_to_string(&self.sparse_path).map_err(|err| SparseError::ReadSparseFile {
+            read_to_string(&self.sparse_path).map_err(|err| Error::ReadSparseFile {
                 source: err,
                 sparse_path: self.sparse_path.clone(),
             })?;
@@ -149,7 +149,7 @@ where
         }
 
         write(&self.sparse_path, rules.to_string().as_bytes()).map_err(|err| {
-            SparseError::WriteSparseFile {
+            Error::WriteSparseFile {
                 source: err,
                 sparse_path: self.sparse_path.clone(),
             }
@@ -162,11 +162,11 @@ where
     ///
     /// # Errors
     ///
-    /// - Return [`SparseError::ReadSparseFile`] if sparse checkout
+    /// - Return [`Error::ReadSparseFile`] if sparse checkout
     ///   configuration file cannot be read.
     pub fn current_rules(&self) -> Result<Vec<String>> {
         read_to_string(&self.sparse_path)
-            .map_err(|err| SparseError::ReadSparseFile {
+            .map_err(|err| Error::ReadSparseFile {
                 source: err,
                 sparse_path: self.sparse_path.clone(),
             })
@@ -364,7 +364,7 @@ impl SparsityMatcher for InvertedGitignore {
 
 /// Sparsity rule management error types.
 #[derive(Debug, thiserror::Error)]
-pub enum SparseError {
+pub enum Error {
     /// Sparse configuration file cannot be crated when missing.
     #[error("failed to create sparse file at {:?}", sparse_path.display())]
     CreateSparseFile {
@@ -391,7 +391,7 @@ pub enum SparseError {
 }
 
 /// Friendly result alias :3
-type Result<T, E = SparseError> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[cfg(test)]
 mod tests {
