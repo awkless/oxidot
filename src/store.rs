@@ -307,6 +307,18 @@ impl Store {
         Ok(())
     }
 
+    #[instrument(skip(self, name), level = "debug")]
+    pub fn tracked_files_status(&self, name: impl AsRef<str>) -> Result<()> {
+        self.use_cluster(name.as_ref(), |cluster| {
+            let files = cluster.list_tracked_files()?;
+            info!("current tracked files for {}:\n {:#?}", name.as_ref(), files);
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+
     #[inline]
     fn lock_state(&self) -> MutexGuard<'_, StoreState> {
         self.state.lock().unwrap()
