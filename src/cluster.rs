@@ -275,7 +275,20 @@ pub trait ClusterAccess: Send + Sync + 'static {
     fn try_open(path: impl AsRef<Path>) -> Result<Cluster>;
 
     /// Clone existing cluster from remote repository.
-    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar) -> Result<Cluster>;
+    fn try_clone(
+        url: impl AsRef<str>,
+        path: impl AsRef<Path>,
+        branch: BranchTarget,
+        bar: ProgressBar,
+    ) -> Result<Cluster>;
+}
+
+#[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum BranchTarget {
+    #[default]
+    Default,
+
+    Target(String),
 }
 
 /// Cluster access through libgit2.
@@ -360,7 +373,12 @@ impl ClusterAccess for Git2Cluster {
     /// - Return [`Error::Git2`] if libgit2 operations fail.
     /// - Return [`Error::Config`] if cluster definition parsing fails.
     /// - Return [`Error::Deployment`] if deployment logic fails.
-    fn try_clone(url: impl AsRef<str>, path: impl AsRef<Path>, bar: ProgressBar) -> Result<Cluster> {
+    fn try_clone(
+        url: impl AsRef<str>,
+        path: impl AsRef<Path>,
+        branch: BranchTarget,
+        bar: ProgressBar,
+    ) -> Result<Cluster> {
         let style = ProgressStyle::with_template(
             "{elapsed_precise:.green}  {msg:<50}  [{wide_bar:.yellow/blue}]",
         )?
@@ -390,11 +408,14 @@ impl ClusterAccess for Git2Cluster {
 
         let mut fo = FetchOptions::new();
         fo.remote_callbacks(rc);
-        let repository = RepoBuilder::new()
-            .bare(true)
-            .fetch_options(fo)
-            .clone(url.as_ref(), path.as_ref())?;
+        let mut builder = RepoBuilder::new();
+        let builder = if let BranchTarget::Target(name) = branch {
+            builder.bare(true).branch(name.as_str()).fetch_options(fo)
+        } else {
+            builder.bare(true).fetch_options(fo)
+        };
 
+        let repository = builder.clone(url.as_ref(), path.as_ref())?;
         let matcher = InvertedGitignore::new();
         let sparsity = SparsityDrafter::new(path.as_ref(), matcher)?;
         let deployer = Git2Deployer::new(repository, sparsity)?;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use oxidot::{
+    cluster::BranchTarget,
     config::{ClusterDefinition, WorkTreeAlias},
     path::{default_cluster_store_dir, home_dir},
     store::Store,
@@ -100,6 +101,10 @@ struct CloneOptions {
     /// URL of remote to clone from.
     #[arg(required = true, value_name = "url")]
     pub url: String,
+
+    /// Select branch to checkout.
+    #[arg(short, long, value_name = "branch")]
+    pub branch: Option<String>,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -219,7 +224,16 @@ fn run_init(opts: InitOptions) -> Result<()> {
 
 async fn run_clone(opts: CloneOptions) -> Result<()> {
     let store = Store::open(default_cluster_store_dir()?)?;
-    store.clone_cluster(opts.cluster_name, opts.url).await?;
+
+    if let Some(branch) = opts.branch {
+        store
+            .clone_cluster(opts.cluster_name, opts.url, BranchTarget::Target(branch))
+            .await?;
+    } else {
+        store
+            .clone_cluster(opts.cluster_name, opts.url, BranchTarget::Default)
+            .await?;
+    };
 
     Ok(())
 }
