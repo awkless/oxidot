@@ -219,10 +219,7 @@ fn run_init(opts: InitOptions) -> Result<()> {
         Some(url) => url,
         None => "<put url to remote here>".into(),
     };
-    definition.settings.remote.branch = match opts.branch {
-        Some(branch) => Some(branch),
-        None => None,
-    };
+    definition.settings.remote.branch = opts.branch;
     definition.settings.work_tree_alias = match opts.work_tree_alias {
         Some(path) => WorkTreeAlias::new(path),
         None => WorkTreeAlias::new(home_dir()?),
