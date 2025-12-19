@@ -178,7 +178,10 @@ impl Store {
     ///
     /// - Return [`Error::Cluster`] if dependencies could not be cloned.
     /// - Return [`Error::Join`] if threads could not be properly joined.
-    pub async fn resolve_dependencies(&self, initial_unresolved: Vec<ClusterDependency>) -> Result<()> {
+    pub async fn resolve_dependencies(
+        &self,
+        initial_unresolved: Vec<ClusterDependency>,
+    ) -> Result<()> {
         let mut unresolved_set = initial_unresolved;
         while !unresolved_set.is_empty() {
             let mut unresolved = self.resolve_dependeny_set(unresolved_set.clone()).await?;
@@ -189,7 +192,10 @@ impl Store {
         Ok(())
     }
 
-    async fn resolve_dependeny_set(&self, unresolved: Vec<ClusterDependency>) -> Result<Vec<ClusterDependency>> {
+    async fn resolve_dependeny_set(
+        &self,
+        unresolved: Vec<ClusterDependency>,
+    ) -> Result<Vec<ClusterDependency>> {
         let multi_bar = MultiProgress::new();
         let mut bars = Vec::new();
 
