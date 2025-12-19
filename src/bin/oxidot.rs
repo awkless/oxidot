@@ -109,6 +109,10 @@ struct CloneOptions {
     /// Select branch to checkout.
     #[arg(short, long, value_name = "branch")]
     pub branch: Option<String>,
+
+    /// Do not clone dependencies of cluster.
+    #[arg(short, long)]
+    pub no_dependencies: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -233,15 +237,16 @@ fn run_init(opts: InitOptions) -> Result<()> {
 async fn run_clone(opts: CloneOptions) -> Result<()> {
     let store = Store::open(default_cluster_store_dir()?)?;
 
-    if let Some(branch) = opts.branch {
-        store
-            .clone_cluster(opts.cluster_name, opts.url, BranchTarget::Target(branch))
-            .await?;
+    let branch = if let Some(branch) = opts.branch {
+        BranchTarget::Target(branch)
     } else {
-        store
-            .clone_cluster(opts.cluster_name, opts.url, BranchTarget::Default)
-            .await?;
+        BranchTarget::Default
     };
+
+    let deps = store.clone_cluster(opts.cluster_name, opts.url, branch)?;
+    if !opts.no_dependencies {
+        store.resolve_dependencies(deps).await?;
+    }
 
     Ok(())
 }

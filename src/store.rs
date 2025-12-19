@@ -31,6 +31,7 @@ use futures::{stream, StreamExt};
 use indicatif::{MultiProgress, ProgressBar};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fs::remove_dir_all,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
@@ -127,6 +128,7 @@ impl Store {
                 name: name.as_ref().to_string(),
             })?;
         removed.undeploy_all()?;
+        remove_dir_all(state.store_path.join(format!("{}.git", name.as_ref())))?;
 
         Ok(removed)
     }
@@ -134,39 +136,66 @@ impl Store {
     /// Clone a cluster along with its dependencies.
     ///
     /// Clones target cluster, and performs dependency resolution by looking
-    /// for missing dependencies and cloning them into the store as well. The
-    /// dependency resolution is done concurrently.
-    ///
-    /// The current progress of dependency cloning is shown via interactive
-    /// progress bars that can prompt the user for credentials if need be
-    /// during the cloning process.
+    /// for missing dependencies. Any missing dependencies are returned to
+    /// allow for dependency resolution if needed.
     ///
     /// # Errors
     ///
     /// - Return [`Error::Cluster`] if cluster cannot be
     ///   initialized.
-    pub async fn clone_cluster(
+    pub fn clone_cluster(
         &self,
         name: impl Into<String>,
         url: impl Into<String>,
         branch: BranchTarget,
-    ) -> Result<()> {
+    ) -> Result<Vec<ClusterDependency>> {
         let name = name.into();
         let url = url.into();
+
+        let unresolved = {
+            let mut state = self.lock_state();
+            let path = state.store_path.join(format!("{}.git", &name));
+            let bar = ProgressBar::no_length();
+
+            let cluster = Git2Cluster::try_clone(&url, &path, branch, bar.clone())?;
+            let unresolved = state.find_unresolved_dependencies(&cluster.definition)?;
+            state.clusters.insert(name.clone(), cluster);
+            bar.finish();
+
+            unresolved
+        };
+
+        Ok(unresolved)
+    }
+
+    /// Resolve dependencies of a cluster.
+    ///
+    /// Clones all missing dependencies between clusters until all have been
+    /// resolved. Each missing cluster dependency is cloned concurrently with
+    /// an interactive progress bar.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`Error::Cluster`] if dependencies could not be cloned.
+    /// - Return [`Error::Join`] if threads could not be properly joined.
+    pub async fn resolve_dependencies(&self, initial_unresolved: Vec<ClusterDependency>) -> Result<()> {
+        let mut unresolved_set = initial_unresolved;
+        while !unresolved_set.is_empty() {
+            let mut unresolved = self.resolve_dependeny_set(unresolved_set.clone()).await?;
+            unresolved_set.clear();
+            unresolved_set.append(&mut unresolved);
+        }
+
+        Ok(())
+    }
+
+    async fn resolve_dependeny_set(&self, unresolved: Vec<ClusterDependency>) -> Result<Vec<ClusterDependency>> {
         let multi_bar = MultiProgress::new();
         let mut bars = Vec::new();
 
-        let (store_path, unresolved) = {
-            let mut state = self.lock_state();
-            let path = state.store_path.join(format!("{}.git", &name));
-            let bar = multi_bar.add(ProgressBar::no_length());
-            bars.push(bar.clone());
-
-            let cluster = Git2Cluster::try_clone(&url, &path, branch, bar)?;
-            let unresolved = state.find_unresolved_dependencies(&cluster.definition)?;
-            state.clusters.insert(name.clone(), cluster);
-
-            (state.store_path.clone(), unresolved)
+        let store_path = {
+            let state = self.lock_state();
+            state.store_path.clone()
         };
 
         let results = Arc::new(Mutex::new(Vec::new()));
@@ -186,7 +215,8 @@ impl Store {
                             BranchTarget::Default
                         };
 
-                        let cluster = Git2Cluster::try_clone(&dep.remote.url, &path, dep_branch, bar.clone())?;
+                        let cluster =
+                            Git2Cluster::try_clone(&dep.remote.url, &path, dep_branch, bar.clone())?;
                         bar.finish();
 
                         Ok::<_, Error>((dep.name.clone(), cluster))
@@ -210,11 +240,13 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut state = self.lock_state();
+        let mut unresolved = Vec::new();
         for (name, cluster) in clusters {
+            unresolved.append(&mut state.find_unresolved_dependencies(&cluster.definition)?);
             state.clusters.insert(name, cluster);
         }
 
-        Ok(())
+        Ok(unresolved)
     }
 
     /// Use target cluster for stuff.
