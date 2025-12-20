@@ -200,27 +200,39 @@ mod tests {
         let result: ClusterDefinition = r#"
             [settings]
             description = "blah blah blah"
-            url = "https://blah.org/foo.git"
             work_tree_alias = "$BLAH"
             include = ["file1", "file2", "file3"]
 
+            [settings.remote]
+            url = "https://blah.org/foo.git"
+            branch = "alternate"
+
             [[dependency]]
             name = "bar"
-            url = "https://blah.org/bar.git"
             include = ["file1", "file2", "file3"]
+
+            [dependency.remote]
+            url = "https://blah.org/bar.git"
+            branch = "blah"
         "#
         .parse()?;
 
         let expect = ClusterDefinition {
             settings: ClusterSettings {
                 description: "blah blah blah".into(),
-                url: "https://blah.org/foo.git".into(),
+                remote: ClusterRemote {
+                    url: "https://blah.org/foo.git".into(),
+                    branch: Some("alternate".into()),
+                },
                 work_tree_alias: WorkTreeAlias::new("/home/blah/blah"),
                 include: Some(vec!["file1".into(), "file2".into(), "file3".into()]),
             },
             dependencies: Some(vec![ClusterDependency {
                 name: "bar".into(),
-                url: "https://blah.org/bar.git".into(),
+                remote: ClusterRemote {
+                    url: "https://blah.org/bar.git".into(),
+                    branch: Some("blah".into()),
+                },
                 include: Some(vec!["file1".into(), "file2".into(), "file3".into()]),
             }]),
         };
@@ -235,13 +247,19 @@ mod tests {
         let result = ClusterDefinition {
             settings: ClusterSettings {
                 description: "blah blah blah".into(),
-                url: "https://blah.org/foo.git".into(),
+                remote: ClusterRemote {
+                    url: "https://blah.org/foo.git".into(),
+                    branch: None,
+                },
                 work_tree_alias: WorkTreeAlias::new("/home/blah/blah"),
                 include: Some(vec!["file1".into(), "file2".into(), "file3".into()]),
             },
             dependencies: Some(vec![ClusterDependency {
                 name: "bar".into(),
-                url: "https://blah.org/bar.git".into(),
+                remote: ClusterRemote {
+                    url: "https://blah.org/bar.git".into(),
+                    branch: None,
+                },
                 include: Some(vec!["file1".into(), "file2".into(), "file3".into()]),
             }]),
         }
@@ -250,7 +268,6 @@ mod tests {
         let expect = indoc! {r#"
             [settings]
             description = "blah blah blah"
-            url = "https://blah.org/foo.git"
             work_tree_alias = "/home/blah/blah"
             include = [
                 "file1",
@@ -258,14 +275,19 @@ mod tests {
                 "file3",
             ]
 
+            [settings.remote]
+            url = "https://blah.org/foo.git"
+
             [[dependency]]
             name = "bar"
-            url = "https://blah.org/bar.git"
             include = [
                 "file1",
                 "file2",
                 "file3",
             ]
+
+            [dependency.remote]
+            url = "https://blah.org/bar.git"
         "#};
 
         assert_eq!(result, expect);
