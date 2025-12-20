@@ -291,7 +291,7 @@ impl Store {
     pub fn use_cluster_dependencies<C, R>(
         &self,
         start: impl AsRef<str>,
-        mut usage: C,
+        usage: C,
     ) -> Result<Vec<R>>
     where
         C: FnMut(&Cluster) -> Result<R>,
@@ -304,13 +304,11 @@ impl Store {
                 name: start.as_ref().into(),
             })?;
 
-        let dependencies = state.list_dependencies(&cluster.definition)?;
-        let results = dependencies
+        state
+            .list_dependencies(&cluster.definition)?
             .into_iter()
-            .map(|cluster| usage(cluster))
-            .collect::<Result<Vec<_>, _>>();
-
-        results
+            .map(usage)
+            .collect::<Result<Vec<_>, _>>()
     }
 
     /// Give detailed status information about cluster store.
