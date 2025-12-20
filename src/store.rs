@@ -145,27 +145,19 @@ impl Store {
     ///   initialized.
     pub fn clone_cluster(
         &self,
-        name: impl Into<String>,
-        url: impl Into<String>,
+        name: impl AsRef<str>,
+        url: impl AsRef<str>,
         branch: BranchTarget,
-    ) -> Result<Vec<ClusterDependency>> {
-        let name = name.into();
-        let url = url.into();
+    ) -> Result<()> {
+        let mut state = self.lock_state();
+        let path = state.store_path.join(format!("{}.git", name.as_ref()));
+        let bar = ProgressBar::no_length();
 
-        let unresolved = {
-            let mut state = self.lock_state();
-            let path = state.store_path.join(format!("{}.git", &name));
-            let bar = ProgressBar::no_length();
+        let cluster = Git2Cluster::try_clone(url.as_ref(), &path, branch, bar.clone())?;
+        state.clusters.insert(name.as_ref().into(), cluster);
+        bar.finish();
 
-            let cluster = Git2Cluster::try_clone(&url, &path, branch, bar.clone())?;
-            let unresolved = state.find_unresolved_dependencies(&cluster.definition)?;
-            state.clusters.insert(name.clone(), cluster);
-            bar.finish();
-
-            unresolved
-        };
-
-        Ok(unresolved)
+        Ok(())
     }
 
     /// Resolve dependencies of a cluster.
@@ -178,11 +170,19 @@ impl Store {
     ///
     /// - Return [`Error::Cluster`] if dependencies could not be cloned.
     /// - Return [`Error::Join`] if threads could not be properly joined.
-    pub async fn resolve_dependencies(
-        &self,
-        initial_unresolved: Vec<ClusterDependency>,
-    ) -> Result<()> {
-        let mut unresolved_set = initial_unresolved;
+    pub async fn resolve_dependencies(&self, start: impl AsRef<str>) -> Result<()> {
+        let mut unresolved_set = {
+            let state = self.lock_state();
+            let cluster = state
+                .clusters
+                .get(start.as_ref())
+                .ok_or(Error::ClusterNotFound {
+                    name: start.as_ref().into(),
+                })?;
+
+            state.find_unresolved_dependencies(&cluster.definition)
+        }?;
+
         while !unresolved_set.is_empty() {
             let mut unresolved = self.resolve_dependeny_set(unresolved_set.clone()).await?;
             unresolved_set.clear();
@@ -262,8 +262,7 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// - Return [`Error::ClusterNotFound`] if cluster does not
-    ///   exist.
+    /// - Return [`Error::ClusterNotFound`] if cluster does not exist.
     /// - Fails if clouser also fails for whatever reason.
     pub fn use_cluster<C, R>(&self, name: impl AsRef<str>, usage: C) -> Result<R>
     where
@@ -278,6 +277,36 @@ impl Store {
             })?;
 
         usage(cluster)
+    }
+
+    /// Operate on every dependency of a target cluster in one shot.
+    ///
+    /// Finds target cluster along with its dependencies in the cluster store,
+    /// and uses the given clouser to operate on each one.
+    ///
+    /// # Errors
+    ///
+    /// - Return [`Error::ClusterNotFound`] if cluster does not exist.
+    /// - Fails if clouser also fails for whatever reason.
+    pub fn use_cluster_dependencies<C, R>(&self, start: impl AsRef<str>, mut usage: C) -> Result<Vec<R>>
+    where
+        C: FnMut(&Cluster) -> Result<R>,
+    {
+        let state = self.lock_state();
+        let cluster = state
+            .clusters
+            .get(start.as_ref())
+            .ok_or(Error::ClusterNotFound {
+                name: start.as_ref().into(),
+            })?;
+
+        let dependencies = state.list_dependencies(&cluster.definition)?;
+        let results = dependencies
+            .into_iter()
+            .map(|cluster| usage(cluster))
+            .collect::<Result<Vec<_>, _>>();
+
+        results
     }
 
     /// Give detailed status information about cluster store.
@@ -498,6 +527,37 @@ impl StoreState {
         }
 
         Ok(unresolved)
+    }
+
+    pub(crate) fn list_dependencies(&self, start: &ClusterDefinition) -> Result<Vec<&Cluster>> {
+        let mut listing = Vec::new();
+        let mut visited = HashSet::new();
+        let mut stack = VecDeque::new();
+
+        if let Some(dependencies) = &start.dependencies {
+            if !dependencies.is_empty() {
+                stack.push_back(dependencies[0].clone());
+            }
+        } else {
+            return Ok(Vec::new());
+        }
+
+        while let Some(current) = stack.pop_back() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+
+            if let Some(cluster) = self.clusters.get(&current.name) {
+                listing.push(cluster);
+                if let Some(deps) = &cluster.definition.dependencies {
+                    for dep in deps {
+                        stack.push_back(dep.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(listing)
     }
 }
 

@@ -113,6 +113,10 @@ struct CloneOptions {
     /// Do not clone dependencies of cluster.
     #[arg(short, long)]
     pub no_dependencies: bool,
+
+    /// Do not issue default deployment rules.
+    #[arg(short = 'd', long)]
+    pub no_default_deployment: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -240,9 +244,16 @@ async fn run_clone(opts: CloneOptions) -> Result<()> {
         BranchTarget::Default
     };
 
-    let deps = store.clone_cluster(opts.cluster_name, opts.url, branch)?;
+    store.clone_cluster(&opts.cluster_name, &opts.url, branch)?;
     if !opts.no_dependencies {
-        store.resolve_dependencies(deps).await?;
+        store.resolve_dependencies(&opts.cluster_name).await?;
+    }
+
+    if !opts.no_default_deployment {
+        store.use_cluster_dependencies(&opts.cluster_name, |cluster| {
+            cluster.deploy_default_rules()?;
+            Ok(())
+        })?;
     }
 
     Ok(())
