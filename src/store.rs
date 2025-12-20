@@ -288,7 +288,11 @@ impl Store {
     ///
     /// - Return [`Error::ClusterNotFound`] if cluster does not exist.
     /// - Fails if clouser also fails for whatever reason.
-    pub fn use_cluster_dependencies<C, R>(&self, start: impl AsRef<str>, mut usage: C) -> Result<Vec<R>>
+    pub fn use_cluster_dependencies<C, R>(
+        &self,
+        start: impl AsRef<str>,
+        mut usage: C,
+    ) -> Result<Vec<R>>
     where
         C: FnMut(&Cluster) -> Result<R>,
     {
